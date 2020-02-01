@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: BSD-3-Clause
+
+set -e
+
+source $TRAVIS_BUILD_DIR/.ci/docker-prelude.sh
+
+if [ -d build ]; then
+  rm -rf build
+fi
+
+# Do not run tests when building on coverity_scan branch
+if [ "${COVERITY_SCAN_BRANCH}" == 1 ]; then
+  echo "Coverity scan branch detected, not running build nor tests...exiting!"
+  exit 0
+fi
+
+# If it's clang, enable asan
+if [[ "$CC" == clang* ]]; then
+  echo "Detecting clang, enable asan"
+  export CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer"
+  echo "Exported CFLAGS=$CFLAGS"
+  config_flags="--disable-hardening"
+  echo "Disabled configure option hardening"
+  export ASAN_ENABLED=true
+  echo "Exported ASAN_ENABLED=$ASAN_ENABLED"
+  # To get line numbers set up the asan symbolizer
+  clang_version=`$CC --version | head -n 1 | cut -d\  -f 3-3 | cut -d\. -f 1-2`
+  # Sometimes the version string has an Ubuntu on the front of it and the field
+  # location changes
+  if [ $clang_version == "version" ]; then
+    clang_version=`$CC --version | head -n 1 | cut -d\  -f 4-4 | cut -d\. -f 1-2`
+  fi
+  echo "Detected clang version: $clang_version"
+  ASAN_SYMBOLIZER_PATH="/usr/lib/llvm-$clang_version/bin/llvm-symbolizer"
+  if [ -e "$ASAN_SYMBOLIZER_PATH" ]; then
+    export ASAN_SYMBOLIZER_PATH
+    echo "Exported ASAN_SYMBOLIZER_PATH=$ASAN_SYMBOLIZER_PATH"
+  else
+    echo "No llvm symbolizer found at: $ASAN_SYMBOLIZER_PATH"
+    unset ASAN_SYMBOLIZER_PATH
+  fi
+else #GCC
+  config_flags="--disable-hardening --enable-code-coverage"
+fi
+
+# Bootstrap in the tpm2.0-tss tools directory
+./bootstrap
+
+# clang has asan enabled with options exported that fail
+# make distcheck, so only do this with gcc.
+# Do a make distcheck in the root, clear it and than
+# cd to the variant directory.
+if [[ "$CC" != clang* ]]; then
+    ./configure
+    make distcheck
+    make distclean
+fi
+
+# Make a build variant directory and change to it
+mkdir ./build
+pushd ./build
+
+# Run scan-build for gcc only.
+# Scan-build does not work with clang because of asan linking errors.
+if [[ "$CC" != clang* ]]; then
+    scan-build ../configure --enable-unit $config_flags
+    scan-build --status-bugs make -j$(nproc)
+
+    # scan-build causes test_tpm2_session to fail, so
+    # rebuild after running scan-build.
+fi
+
+../configure --enable-unit $config_flags
+make -j$(nproc)
+make -j check
+
+popd
+
+# back in root git directory, check for whitespace errors. We do this post CI
+# so people can verify the rest of their patch works in CI before dying.
+# git diff --check fails with a non-zero return code causing the shell to die
+# as it has a set -e executed.
+[ -z "$TRAVIS_TAG" ] && git diff --check origin/${TRAVIS_BRANCH:-master}
+
+if [ "$ENABLE_COVERAGE" == "true" ]; then
+    bash <(curl -s https://codecov.io/bash)
+else
+    echo "ENABLE_COVERAGE not true, got \"$ENABLE_COVERAGE\""
+fi
+
+exit 0

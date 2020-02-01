@@ -1,0 +1,13 @@
+# Ignore everything
+*
+# But not these files...
+!.gitignore
+!README.md
+!get-capability-tpm-prop-fixed.bin
+!ek-template-default.bin
+!*.sh
+!*.c
+!*.h
+
+# ...even if they are in subdirectories
+!*/
