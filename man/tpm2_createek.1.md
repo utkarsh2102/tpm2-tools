@@ -25,10 +25,6 @@ Refer to:
 
     The authorization value for the endorsement hierarchy
 
-  * **-p**, **\--ek-auth**=_AUTH_:
-
-    The authorization value for the primary object (endorsement key) created.
-
   * **-w**, **\--owner-auth**=_AUTH_
 
     The authorization value for the owner hierarchy.
@@ -54,7 +50,7 @@ Refer to:
 
     The optional input for a file to save the public portion of endorsement key.
 
-  * **-t**, **\--template**=_FILE_:
+  * **-t**, **\--template**:
 
     The optional manufacturer defined endorsement key template and nonce from
     fixed NV Indices to populate the **TPM2B_PUBLIC** public area.
@@ -87,7 +83,7 @@ the various known TCTI modules.
 
 ### Create an Endorsement Key and make it persistent
 ```bash
-tpm2_createek -P abc123 -w abc123 -p passwd -c 0x81010001 -G rsa -u ek.pub
+tpm2_createek -P abc123 -w abc123 -c 0x81010001 -G rsa -u ek.pub
 ```
 
 ### Create a transient Endorsement Key, flush it, and reload it.

@@ -103,24 +103,13 @@ static inline tool_rc tpm2_util_nv_max_buffer_size(ESYS_CONTEXT *ectx,
  */
 static inline tool_rc tpm2_util_nv_read(ESYS_CONTEXT *ectx,
         TPMI_RH_NV_INDEX nv_index, UINT16 size, UINT16 offset,
-        TPMI_RH_PROVISION hierarchy, tpm2_session *sess, UINT8 **data_buffer,
-        UINT16 *bytes_written) {
+        tpm2_loaded_object * auth_hierarchy_obj, UINT8 **data_buffer,
+        UINT16 *bytes_written, TPM2B_DIGEST *cp_hash) {
 
     *data_buffer = NULL;
 
-    tool_rc tmp_rc;
-
-    ESYS_TR nv_handle;
-    tool_rc rc = tpm2_from_tpm_public(ectx, nv_index, ESYS_TR_NONE,
-            ESYS_TR_NONE, ESYS_TR_NONE, &nv_handle);
-    if (rc != tool_rc_success) {
-        goto out;
-    }
-
-    // Don't use tpm2_util_nv_read_public since we need to make use of nv_handle
-    // later
     TPM2B_NV_PUBLIC *nv_public = NULL;
-    rc = tpm2_nv_readpublic(ectx, nv_handle, &nv_public, NULL);
+    tool_rc rc = tpm2_util_nv_read_public(ectx, nv_index, &nv_public);
     if (rc != tool_rc_success) {
         goto out;
     }
@@ -148,6 +137,10 @@ static inline tool_rc tpm2_util_nv_read(ESYS_CONTEXT *ectx,
         goto out;
     }
 
+    if (cp_hash) {
+        goto tpm2_util_nv_read_collect_cp_hash;
+    }
+
     UINT32 max_data_size;
     rc = tpm2_util_nv_max_buffer_size(ectx, &max_data_size);
     if (rc != tool_rc_success) {
@@ -160,19 +153,14 @@ static inline tool_rc tpm2_util_nv_read(ESYS_CONTEXT *ectx,
         max_data_size = NV_DEFAULT_BUFFER_SIZE;
     }
 
-    ESYS_TR tr_hierarchy;
-    if (hierarchy == nv_index) {
-        tr_hierarchy = nv_handle;
-    } else {
-        tr_hierarchy = tpm2_tpmi_hierarchy_to_esys_tr(hierarchy);
-    }
-
-    ESYS_TR shandle1 = ESYS_TR_NONE;
-
-    tmp_rc = tpm2_auth_util_get_shandle(ectx, tr_hierarchy, sess, &shandle1);
-    if (tmp_rc != tool_rc_success) {
-        LOG_ERR("Couldn't get shandle for hierarchy");
-        rc = tmp_rc;
+tpm2_util_nv_read_collect_cp_hash:
+    if (cp_hash) {
+        TPM2B_MAX_NV_BUFFER *nv_data;
+        rc = tpm2_nv_read(ectx, auth_hierarchy_obj, nv_index, size, offset,
+            &nv_data, cp_hash);
+        if (rc != tool_rc_success) {
+            LOG_ERR("Failed cpHash for NVRAM read at index 0x%X", nv_index);
+        }
         goto out;
     }
 
@@ -191,8 +179,8 @@ static inline tool_rc tpm2_util_nv_read(ESYS_CONTEXT *ectx,
 
         TPM2B_MAX_NV_BUFFER *nv_data;
 
-        rc = tpm2_nv_read(ectx, tr_hierarchy, nv_handle, shandle1, ESYS_TR_NONE,
-                ESYS_TR_NONE, bytes_to_read, offset, &nv_data);
+        rc = tpm2_nv_read(ectx, auth_hierarchy_obj, nv_index, bytes_to_read,
+            offset, &nv_data, cp_hash);
         if (rc != tool_rc_success) {
             LOG_ERR("Failed to read NVRAM area at index 0x%X", nv_index);
             goto out;
@@ -215,11 +203,6 @@ out:
     if (rc != tool_rc_success && *data_buffer != NULL) {
         free(*data_buffer);
         *data_buffer = NULL;
-    }
-
-    tmp_rc = tpm2_close(ectx, &nv_handle);
-    if (tmp_rc != tool_rc_success) {
-        rc = tmp_rc;
     }
 
     return rc;

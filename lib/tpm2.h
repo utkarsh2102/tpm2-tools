@@ -31,9 +31,9 @@ tool_rc tpm2_getcap(ESYS_CONTEXT *esys_context,TPM2_CAP capability,
         UINT32 property, UINT32 property_count, TPMI_YES_NO *more_data,
         TPMS_CAPABILITY_DATA **capability_data);
 
-tool_rc tpm2_nv_read(ESYS_CONTEXT *esys_context, ESYS_TR auth_handle,
-        ESYS_TR nv_index, ESYS_TR shandle1, ESYS_TR shandle2, ESYS_TR shandle3,
-        UINT16 size, UINT16 offset, TPM2B_MAX_NV_BUFFER **data);
+tool_rc tpm2_nv_read(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index, UINT16 size,
+    UINT16 offset, TPM2B_MAX_NV_BUFFER **data, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_context_save(ESYS_CONTEXT *esys_context, ESYS_TR save_handle,
         TPMS_CONTEXT **context);
@@ -94,6 +94,9 @@ tool_rc tpm2_policy_namehash(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
 tool_rc tpm2_policy_template(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
     const TPM2B_DIGEST *template_hash);
 
+tool_rc tpm2_policy_cphash(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
+    const TPM2B_DIGEST *cphash);
+
 tool_rc tpm2_policy_pcr(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
         ESYS_TR shandle1, ESYS_TR shandle2, ESYS_TR shandle3,
         const TPM2B_DIGEST *pcr_digest, const TPML_PCR_SELECTION *pcrs);
@@ -118,7 +121,7 @@ tool_rc tpm2_policy_secret(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_entity_obj, ESYS_TR policy_session,
         INT32 expiration, TPMT_TK_AUTH **policy_ticket,
         TPM2B_TIMEOUT **timeout, TPM2B_NONCE *nonce_tpm,
-        TPM2B_NONCE *policy_qualifier);
+        TPM2B_NONCE *policy_qualifier, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_policy_getdigest(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
         ESYS_TR shandle1, ESYS_TR shandle2, ESYS_TR shandle3,
@@ -149,7 +152,8 @@ tool_rc tpm2_mu_tpmt_public_marshal(TPMT_PUBLIC const *src, uint8_t buffer[],
 tool_rc tpm2_evictcontrol(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj,
         tpm2_loaded_object *to_persist_key_obj,
-        TPMI_DH_PERSISTENT persistent_handle, ESYS_TR *new_object_handle);
+        TPMI_DH_PERSISTENT persistent_handle, ESYS_TR *new_object_handle,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_hash(ESYS_CONTEXT *esys_context, ESYS_TR shandle1, ESYS_TR shandle2,
         ESYS_TR shandle3, const TPM2B_MAX_BUFFER *data, TPMI_ALG_HASH hash_alg,
@@ -177,41 +181,45 @@ tool_rc tpm2_tr_set_auth(ESYS_CONTEXT *esys_context, ESYS_TR handle,
 tool_rc tpm2_activatecredential(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *activatehandle, tpm2_loaded_object *keyhandle,
         const TPM2B_ID_OBJECT *credential_blob,
-        const TPM2B_ENCRYPTED_SECRET *secret, TPM2B_DIGEST **cert_info);
+        const TPM2B_ENCRYPTED_SECRET *secret, TPM2B_DIGEST **cert_info,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_create(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
         const TPM2B_SENSITIVE_CREATE *in_sensitive, const TPM2B_PUBLIC *in_public,
         const TPM2B_DATA *outside_info, const TPML_PCR_SELECTION *creation_pcr,
         TPM2B_PRIVATE **out_private, TPM2B_PUBLIC **out_public,
         TPM2B_CREATION_DATA **creation_data, TPM2B_DIGEST **creation_hash,
-        TPMT_TK_CREATION **creation_ticket);
+        TPMT_TK_CREATION **creation_ticket, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_create_loaded(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *parent_obj,
         const TPM2B_SENSITIVE_CREATE *in_sensitive,
         const TPM2B_TEMPLATE *in_public, ESYS_TR *object_handle,
-        TPM2B_PRIVATE **out_private, TPM2B_PUBLIC **out_public);
+        TPM2B_PRIVATE **out_private, TPM2B_PUBLIC **out_public,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_object_change_auth(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *parent_object, tpm2_loaded_object *object,
-        const TPM2B_AUTH *new_auth, TPM2B_PRIVATE **out_private);
+        const TPM2B_AUTH *new_auth, TPM2B_PRIVATE **out_private,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nv_change_auth(ESYS_CONTEXT *esys_context, tpm2_loaded_object *nv,
-        const TPM2B_AUTH *new_auth);
+        const TPM2B_AUTH *new_auth, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_hierarchy_change_auth(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *hierarchy, const TPM2B_AUTH *new_auth);
+        tpm2_loaded_object *hierarchy, const TPM2B_AUTH *new_auth,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_certify(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *certifiedkey_obj,
         tpm2_loaded_object *signingkey_obj, TPM2B_DATA *qualifying_data,
         TPMT_SIG_SCHEME *scheme, TPM2B_ATTEST **certify_info,
-        TPMT_SIGNATURE **signature);
+        TPMT_SIGNATURE **signature, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_rsa_decrypt(ESYS_CONTEXT *esys_context, tpm2_loaded_object *keyobj,
         const TPM2B_PUBLIC_KEY_RSA *cipher_text,
         const TPMT_RSA_DECRYPT *in_scheme, const TPM2B_DATA *label,
-        TPM2B_PUBLIC_KEY_RSA **message);
+        TPM2B_PUBLIC_KEY_RSA **message, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_rsa_encrypt(ESYS_CONTEXT *ectx, tpm2_loaded_object *keyobj,
         const TPM2B_PUBLIC_KEY_RSA *message, const TPMT_RSA_DECRYPT *scheme,
@@ -219,42 +227,45 @@ tool_rc tpm2_rsa_encrypt(ESYS_CONTEXT *ectx, tpm2_loaded_object *keyobj,
 
 tool_rc tpm2_load(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parentobj,
         const TPM2B_PRIVATE *in_private, const TPM2B_PUBLIC *in_public,
-        ESYS_TR *object_handle);
+        ESYS_TR *object_handle, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_clear(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy);
+        tpm2_loaded_object *auth_hierarchy, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_clearcontrol(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy, TPMI_YES_NO disable_clear);
+        tpm2_loaded_object *auth_hierarchy, TPMI_YES_NO disable_clear,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_clockrateadjust(ESYS_CONTEXT *ectx, tpm2_loaded_object *object,
-        TPM2_CLOCK_ADJUST rate_adjust);
+        TPM2_CLOCK_ADJUST rate_adjust, TPM2B_DIGEST *cp_hash);
 
-tool_rc tpm2_dictionarylockout(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy,
-        bool clear_lockout,
-        bool setup_parameters, UINT32 max_tries, UINT32 recovery_time,
-        UINT32 lockout_recovery_time);
+tool_rc tpm2_dictionarylockout_reset(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *auth_hierarchy, TPM2B_DIGEST *cp_hash);
+
+tool_rc tpm2_dictionarylockout_setup(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *auth_hierarchy, UINT32 max_tries,
+        UINT32 recovery_time, UINT32 lockout_recovery_time,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_duplicate(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *duplicable_key, ESYS_TR new_parent_handle,
+        tpm2_loaded_object *duplicable_key, tpm2_loaded_object *new_parent_handle,
         const TPM2B_DATA *in_key, const TPMT_SYM_DEF_OBJECT *sym_alg,
         TPM2B_DATA **out_key, TPM2B_PRIVATE **duplicate,
-        TPM2B_ENCRYPTED_SECRET **encrypted_seed);
+        TPM2B_ENCRYPTED_SECRET **encrypted_seed, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_encryptdecrypt(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *encryption_key_obj, TPMI_YES_NO decrypt,
         TPMI_ALG_SYM_MODE mode, const TPM2B_IV *iv_in,
         const TPM2B_MAX_BUFFER *input_data, TPM2B_MAX_BUFFER **output_data,
-        TPM2B_IV **iv_out, ESYS_TR shandle1, unsigned *version);
+        TPM2B_IV **iv_out, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_hierarchycontrol(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy, TPMI_RH_ENABLES enable,
-        TPMI_YES_NO state);
+        TPMI_YES_NO state, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_hmac(ESYS_CONTEXT *esys_context, tpm2_loaded_object *hmac_key_obj,
         TPMI_ALG_HASH halg, const TPM2B_MAX_BUFFER *input_buffer,
-        TPM2B_DIGEST **out_hmac);
+        TPM2B_DIGEST **out_hmac, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_hmac_start(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *hmac_key_obj, TPMI_ALG_HASH halg,
@@ -272,45 +283,50 @@ tool_rc tpm2_hmac_sequencecomplete(ESYS_CONTEXT *esys_context,
 tool_rc tpm2_import(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
         const TPM2B_DATA *encryption_key, const TPM2B_PUBLIC *object_public,
         const TPM2B_PRIVATE *duplicate, const TPM2B_ENCRYPTED_SECRET *in_sym_seed,
-        const TPMT_SYM_DEF_OBJECT *symmetric_alg, TPM2B_PRIVATE **out_private);
+        const TPMT_SYM_DEF_OBJECT *symmetric_alg, TPM2B_PRIVATE **out_private,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nv_definespace(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, const TPM2B_AUTH *auth,
-        const TPM2B_NV_PUBLIC *public_info);
+        const TPM2B_NV_PUBLIC *public_info, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvextend(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
-        TPM2B_MAX_NV_BUFFER *data);
+        TPM2B_MAX_NV_BUFFER *data, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nv_increment(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index);
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvreadlock(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index);
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvglobalwritelock(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj);
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvwritelock(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index);
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_tr_from_tpm_public(ESYS_CONTEXT *esys_context,
         TPM2_HANDLE handle, ESYS_TR *tr_handle);
 
 tool_rc tpm2_nvsetbits(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
-        UINT64 bits);
+        UINT64 bits, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvundefine(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index);
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+         TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvundefinespecial(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
-        tpm2_session *policy_session);
+        tpm2_session *policy_session,  TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvwrite(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nvindex,
-        const TPM2B_MAX_NV_BUFFER *data, UINT16 offset);
+        const TPM2B_MAX_NV_BUFFER *data, UINT16 offset, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_pcr_allocate(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj,
@@ -318,12 +334,13 @@ tool_rc tpm2_pcr_allocate(ESYS_CONTEXT *esys_context,
 
 tool_rc tpm2_sign(ESYS_CONTEXT *esys_context, tpm2_loaded_object *signingkey_obj,
         TPM2B_DIGEST *digest, TPMT_SIG_SCHEME *in_scheme,
-        TPMT_TK_HASHCHECK *validation, TPMT_SIGNATURE **signature);
+        TPMT_TK_HASHCHECK *validation, TPMT_SIGNATURE **signature,
+        TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_quote(ESYS_CONTEXT *esys_context, tpm2_loaded_object *quote_obj,
         TPMT_SIG_SCHEME *in_scheme, TPM2B_DATA *qualifying_data,
         TPML_PCR_SELECTION *PCRselect, TPM2B_ATTEST **quoted,
-        TPMT_SIGNATURE **signature);
+        TPMT_SIGNATURE **signature, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_changeeps(ESYS_CONTEXT *ectx,
     tpm2_session *platform_hierarchy_session);
@@ -332,11 +349,11 @@ tool_rc tpm2_changepps(ESYS_CONTEXT *ectx,
     tpm2_session *platform_hierarchy_session);
 
 tool_rc tpm2_unseal(ESYS_CONTEXT *esys_context, tpm2_loaded_object *sealkey_obj,
-        TPM2B_SENSITIVE_DATA **out_data);
+        TPM2B_SENSITIVE_DATA **out_data, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_policy_authorize_nv(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *auth_entity_obj, TPM2_HANDLE nv_index,
-    ESYS_TR policy_session);
+    ESYS_TR policy_session, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_incrementalselftest(ESYS_CONTEXT *ectx, const TPML_ALG *to_test,
         TPML_ALG **to_do_list);
@@ -372,14 +389,15 @@ tool_rc tpm2_verifysignature(ESYS_CONTEXT *ectx, ESYS_TR key_handle,
 
 tool_rc tpm2_readclock(ESYS_CONTEXT *ectx, TPMS_TIME_INFO **current_time);
 
-tool_rc tpm2_setclock(ESYS_CONTEXT *ectx, tpm2_loaded_object *object, UINT64 new_time);
+tool_rc tpm2_setclock(ESYS_CONTEXT *ectx, tpm2_loaded_object *object,
+UINT64 new_time, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_shutdown(ESYS_CONTEXT *ectx, TPM2_SU shutdown_type);
 
 tool_rc tpm2_policy_nv(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *auth_entity_obj, TPM2_HANDLE nv_index,
     ESYS_TR policy_session, const TPM2B_OPERAND *operand_b, UINT16 offset,
-    TPM2_EO operation);
+    TPM2_EO operation, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_policy_countertimer(ESYS_CONTEXT *esys_context,
     ESYS_TR policy_session, const TPM2B_OPERAND *operand_b, UINT16 offset,
@@ -395,17 +413,19 @@ tool_rc tpm2_certifycreation(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *signingkey_obj, tpm2_loaded_object *certifiedkey_obj,
     TPM2B_DIGEST *creation_hash, TPMT_SIG_SCHEME *in_scheme,
     TPMT_TK_CREATION *creation_ticket, TPM2B_ATTEST **certify_info,
-    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier);
+    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier,
+    TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_nvcertify(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *signingkey_obj, tpm2_loaded_object *nvindex_authobj,
     TPM2_HANDLE nv_index, UINT16 offset, UINT16 size,
     TPMT_SIG_SCHEME *in_scheme, TPM2B_ATTEST **certify_info,
-    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier);
+    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier,
+    TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_setprimarypolicy(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *hierarchy_object, TPM2B_DIGEST *auth_policy,
-    TPMI_ALG_HASH hash_algorithm);
+    TPMI_ALG_HASH hash_algorithm, TPM2B_DIGEST *cp_hash);
 
 tool_rc tpm2_gettime(ESYS_CONTEXT *ectx,
         tpm2_loaded_object *privacy_admin,
@@ -413,6 +433,14 @@ tool_rc tpm2_gettime(ESYS_CONTEXT *ectx,
         const TPM2B_DATA *qualifying_data,
         const TPMT_SIG_SCHEME *scheme,
         TPM2B_ATTEST **time_info,
-        TPMT_SIGNATURE **signature);
+        TPMT_SIGNATURE **signature,
+        TPM2B_DIGEST *cp_hash);
+
+tool_rc tpm2_getsapicontext(ESYS_CONTEXT *esys_context,
+    TSS2_SYS_CONTEXT **sys_context);
+
+tool_rc tpm2_sapi_getcphash(TSS2_SYS_CONTEXT *sys_context,
+    const TPM2B_NAME *name1, const TPM2B_NAME *name2, const TPM2B_NAME *name3,
+    TPMI_ALG_HASH halg, TPM2B_DIGEST *cp_hash);
 
 #endif /* LIB_TPM2_H_ */

@@ -38,6 +38,8 @@ struct tpm_nvcertify_ctx {
     char *certify_info_path;
     char *signature_path;
     tpm2_convert_sig_fmt sig_format;
+
+    char *cp_hash_path;
 };
 
 static tpm_nvcertify_ctx ctx = {
@@ -78,6 +80,7 @@ static bool set_signature_format(char *value) {
 static bool on_option(char key, char *value) {
 
     bool result = true;
+    uint32_t input_value;
 
     switch (key) {
     case 'C':
@@ -108,21 +111,36 @@ static bool on_option(char key, char *value) {
         ctx.policy_qualifier_arg = value;
         break;
     case 0:
-        result = tpm2_util_string_to_uint32(value, (uint32_t*)&ctx.size);
+        result = tpm2_util_string_to_uint32(value, &input_value);
         if (!result) {
             LOG_ERR("Could not convert size to number, got: \"%s\"", value);
             return false;
         }
+        if (input_value > UINT16_MAX) {
+            LOG_ERR("Specified size is larger than that allowed by command");
+            return false;
+        } else {
+            ctx.size = input_value;
+        }
         break;
     case 1:
-        result = tpm2_util_string_to_uint32(value, (uint32_t*)&ctx.offset);
+        result = tpm2_util_string_to_uint32(value, &input_value);
         if (!result) {
             LOG_ERR("Could not convert offset to number, got: \"%s\"", value);
             return false;
         }
+        if (input_value > UINT16_MAX) {
+            LOG_ERR("Specified offset is larger than that allowed by command");
+            return false;
+        } else {
+            ctx.offset = input_value;
+        }
         break;
     case 2:
         ctx.certify_info_path = value;
+        break;
+    case 3:
+        ctx.cp_hash_path = value;
         break;
     }
 
@@ -155,6 +173,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
         { "size",               required_argument, NULL,  0  },
         { "offset",             required_argument, NULL,  1  },
         { "attestation",        required_argument, NULL,  2  },
+        { "cphash",             required_argument, NULL,  3  },
     };
 
     *opts = tpm2_options_new("C:P:c:p:g:s:f:o:q:", ARRAY_LEN(topts), topts,
@@ -297,15 +316,30 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     //ESAPI call
     TPMT_SIGNATURE *signature = NULL;
     TPM2B_ATTEST *certify_info = NULL;
-    rc = tpm2_nvcertify(ectx, &ctx.signing_key.object,
-        &ctx.nvindex_authobj.object, ctx.nv_index, ctx.offset, ctx.size,
-        &in_scheme, &certify_info, &signature, &policy_qualifier);
-    if (rc != tool_rc_success) {
+    if (!ctx.cp_hash_path) {
+        rc = tpm2_nvcertify(ectx, &ctx.signing_key.object,
+            &ctx.nvindex_authobj.object, ctx.nv_index, ctx.offset, ctx.size,
+            &in_scheme, &certify_info, &signature, &policy_qualifier, NULL);
+        if (rc != tool_rc_success) {
+            goto tpm2_tool_onrun_out;
+        }
+        //Output
+        rc = process_nvcertify_output(signature, certify_info);
         goto tpm2_tool_onrun_out;
     }
 
-    //Output
-    rc = process_nvcertify_output(signature, certify_info);
+    TPM2B_DIGEST cp_hash = { .size = 0 };
+    rc = tpm2_nvcertify(ectx, &ctx.signing_key.object,
+            &ctx.nvindex_authobj.object, ctx.nv_index, ctx.offset, ctx.size,
+            &in_scheme, &certify_info, &signature, &policy_qualifier, &cp_hash);
+    if (rc != tool_rc_success) {
+        return rc;
+    }
+
+    result = files_save_digest(&cp_hash, ctx.cp_hash_path);
+    if (!result) {
+        rc = tool_rc_general_error;
+    }
 
 tpm2_tool_onrun_out:
     Esys_Free(signature);
@@ -318,14 +352,17 @@ tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
 
     tool_rc rc = tool_rc_success;
 
-    tool_rc tmp_rc = tpm2_session_close(&ctx.signing_key.object.session);
-    if (tmp_rc != tool_rc_success) {
-        rc = tmp_rc;
-    }
+    if (!ctx.cp_hash_path) {
 
-    tmp_rc = tpm2_session_close(&ctx.nvindex_authobj.object.session);
-    if (tmp_rc != tool_rc_success) {
-        rc = tmp_rc;
+        tool_rc tmp_rc = tpm2_session_close(&ctx.signing_key.object.session);
+        if (tmp_rc != tool_rc_success) {
+            rc = tmp_rc;
+        }
+
+        tmp_rc = tpm2_session_close(&ctx.nvindex_authobj.object.session);
+        if (tmp_rc != tool_rc_success) {
+            rc = tmp_rc;
+        }
     }
 
     return rc;

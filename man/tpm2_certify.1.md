@@ -55,6 +55,12 @@ These options control the certification:
 
     Format selection for the signature output file.
 
+  * **\--cphash**=_FILE_
+
+    File path to record the hash of the command parameters. This is commonly
+    termed as cpHash. NOTE: When this option is selected, The tool will not
+    actually execute the command, it simply returns a cpHash.
+
 ## References
 
 [context object format](common/ctxobj.md) details the methods for specifying
@@ -77,14 +83,17 @@ the various known TCTI modules.
 
 # EXAMPLES
 
+Create a primary key and certify it with a signing key.
+
 ```bash
-tpm2_certify -H 0x81010002 -P 0x0011 -p 0x00FF -g 0x00B -a <fileName> \
--s <fileName>
+tpm2_createprimary -Q -C e -g sha256 -G rsa -c primary.ctx
 
-tpm2_certify -C obj.context -c key.context -P 0x0011 -p 0x00FF -g 0x00B \
--a <fileName> -s <fileName>
+tpm2_create -Q -g sha256 -G rsa -u certify.pub -r certify.priv -C primary.ctx
 
-tpm2_certify -H 0x81010002 -P 0011 -p 00FF  -g 0x00B -a <fileName> -s <fileName>
+tpm2_load -Q -C primary.ctx -u certify.pub -r certify.priv -n certify.name \
+-c certify.ctx
+
+tpm2_certify -Q -c primary.ctx -C certify.ctx -g sha256 -o attest.out -s sig.out
 ```
 
 [returns](common/returns.md)

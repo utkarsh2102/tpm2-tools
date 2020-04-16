@@ -32,6 +32,17 @@ AM_CONDITIONAL(
     [HAVE_MAN_PAGES],
     [test -d "${srcdir}/man/man1" -o "x${PANDOC}" = "xyes"])
 
+AC_ARG_ENABLE([fapi],
+    [AS_HELP_STRING([--disable-fapi], [disable FAPI tools (default: auto)])],,
+    [enable_fapi=check])
+AS_IF([test "$enable_fapi" = yes -o "$enable_fapi" = check],
+      [PKG_CHECK_MODULES([TSS2_FAPI], [tss2-fapi], [enable_fapi=yes], [
+         AS_IF([test "$enable_fapi" = yes], [AC_MSG_ERROR([Required module tss2-fapi not found])])
+         enable_fapi=no
+         ])
+      ])
+AM_CONDITIONAL([HAVE_FAPI], [test "$enable_fapi" = yes])
+
 PKG_CHECK_MODULES([TSS2_ESYS_3_0], [tss2-esys >= 3.0.0],
                   [AC_DEFINE([ESYS_3_0], [1], [Esys3.0])]
                   [AC_SUBST([TSS2_ESYS_CFLAGS], [$TSS2_ESYS_3_0_CFLAGS])
@@ -43,8 +54,10 @@ PKG_CHECK_MODULES([TSS2_ESYS_3_0], [tss2-esys >= 3.0.0],
 PKG_CHECK_MODULES([TSS2_TCTILDR], [tss2-tctildr])
 PKG_CHECK_MODULES([TSS2_MU], [tss2-mu])
 PKG_CHECK_MODULES([TSS2_RC], [tss2-rc])
+PKG_CHECK_MODULES([TSS2_SYS], [tss2-sys])
 PKG_CHECK_MODULES([CRYPTO], [libcrypto >= 1.0.2g])
 PKG_CHECK_MODULES([CURL], [libcurl])
+PKG_CHECK_MODULES([UUID], [uuid])
 
 # backwards compat with older pkg-config
 # - pull in AC_DEFUN from pkg.m4
@@ -76,10 +89,13 @@ AC_CANONICAL_HOST
 case "${host_os}" in
     *nto-qnx*)
         EXTRA_CFLAGS="$EXTRA_CFLAGS -D_QNX_SOURCE"
+        LIBDL_LDFLAGS=""
         ;;
     *)
+        LIBDL_LDFLAGS="-ldl"
         ;;
 esac
+AC_SUBST([LIBDL_LDFLAGS])
 
 AC_ARG_ENABLE([unit],
             [AS_HELP_STRING([--enable-unit],
@@ -135,6 +151,10 @@ AS_IF([test "x$enable_unit" != xno], [
     AS_IF([test $MKTEMP = missing],
           [AC_MSG_ERROR([Required executable mktemp not found, some system tests will fail!])])
 
+    AC_CHECK_PROG([EXPECT], [expect], yes, no)
+    AS_IF([test $EXPECT = missing],
+          [AC_MSG_ERROR([Required executable expect not found, some system tests will fail!])])
+
     unit_test_tool_report="- tpm2_abrmd: $tpm2_abrmd
     - tpm_server: $tpm_server
     - bash: $BASH_SHELL
@@ -142,8 +162,17 @@ AS_IF([test "x$enable_unit" != xno], [
     - xxd: $XXD
     - ss: $SS
     - shasum: $SHASUM
-    - mktemp: $MKTEMP"
+    - mktemp: $MKTEMP
+    - expect: $EXPECT"
 ])
+
+AC_ARG_ENABLE([dlclose],
+  [AS_HELP_STRING([--disable-dlclose],
+                            [Some versions of libc cause a sigsegv on exit, this disables the dlclose and works around that bug])],
+  [AC_DEFINE([DISABLE_DLCLOSE], [1],
+  [Some versions of libc cause a sigsegv on exit with dlclose(), this disables the dlclose()
+  and works around that bug])]
+ )
 
 AC_ARG_ENABLE([hardening],
   [AS_HELP_STRING([--disable-hardening],

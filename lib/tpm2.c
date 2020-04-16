@@ -1,12 +1,16 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 
+#include <string.h>
 #include <tss2/tss2_mu.h>
+#include <tss2/tss2_sys.h>
 
 #include "log.h"
 #include "object.h"
 #include "tool_rc.h"
 #include "tpm2.h"
+#include "tpm2_alg_util.h"
 #include "tpm2_auth_util.h"
+#include "tpm2_openssl.h"
 #include "tpm2_tool.h"
 #include "config.h"
 
@@ -121,18 +125,80 @@ tool_rc tpm2_getcap(ESYS_CONTEXT *esys_context, TPM2_CAP capability,
     return tool_rc_success;
 }
 
-tool_rc tpm2_nv_read(ESYS_CONTEXT *esys_context, ESYS_TR auth_handle,
-        ESYS_TR nv_index, ESYS_TR shandle1, ESYS_TR shandle2, ESYS_TR shandle3,
-        UINT16 size, UINT16 offset, TPM2B_MAX_NV_BUFFER **data) {
+tool_rc tpm2_nv_read(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index, UINT16 size,
+    UINT16 offset, TPM2B_MAX_NV_BUFFER **data, TPM2B_DIGEST *cp_hash) {
 
-    TSS2_RC rval = Esys_NV_Read(esys_context, auth_handle, nv_index, shandle1,
-            shandle2, shandle3, size, offset, data);
+    ESYS_TR esys_tr_nv_handle;
+    TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
+            ESYS_TR_NONE, ESYS_TR_NONE, &esys_tr_nv_handle);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Esys_TR_FromTPMPublic, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    ESYS_TR auth_hierarchy_obj_session_handle = ESYS_TR_NONE;
+    tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+            auth_hierarchy_obj->tr_handle, auth_hierarchy_obj->session,
+            &auth_hierarchy_obj_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get shandle");
+        return rc;
+    }
+
+        if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_Read_Prepare(sys_context, auth_hierarchy_obj->handle,
+            nv_index, size, offset);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_Read_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvread_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvread_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvread_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvread_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvread_skip_esapi_call;
+    }
+
+    rval = Esys_NV_Read(esys_context, auth_hierarchy_obj->tr_handle,
+        esys_tr_nv_handle, auth_hierarchy_obj_session_handle, ESYS_TR_NONE,
+        ESYS_TR_NONE, size, offset, data);
     if (rval != TSS2_RC_SUCCESS) {
         LOG_PERR(Esys_NV_Read, rval);
         return tool_rc_from_tpm(rval);
     }
-
-    return tool_rc_success;
+tpm2_nvread_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_context_save(ESYS_CONTEXT *esys_context, ESYS_TR save_handle,
@@ -343,6 +409,19 @@ tool_rc tpm2_policy_template(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
     return tool_rc_success;
 }
 
+tool_rc tpm2_policy_cphash(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
+    const TPM2B_DIGEST *cphash) {
+
+    TSS2_RC rval = Esys_PolicyCpHash(esys_context, policy_session,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, cphash);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_PolicyCpHash, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
 tool_rc tpm2_policy_pcr(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
         ESYS_TR shandle1, ESYS_TR shandle2, ESYS_TR shandle3,
         const TPM2B_DIGEST *pcr_digest, const TPML_PCR_SELECTION *pcrs) {
@@ -416,8 +495,8 @@ tool_rc tpm2_policy_authvalue(ESYS_CONTEXT *esys_context,
 }
 
 tool_rc tpm2_policy_authorize_nv(ESYS_CONTEXT *esys_context,
-    tpm2_loaded_object *auth_entity_obj, TPM2_HANDLE nv_index,
-    ESYS_TR policy_session) {
+    tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+    ESYS_TR policy_session, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_index;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
@@ -427,30 +506,85 @@ tool_rc tpm2_policy_authorize_nv(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    ESYS_TR auth_entity_obj_session_handle = ESYS_TR_NONE;
+    ESYS_TR auth_hierarchy_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
-            auth_entity_obj->tr_handle, auth_entity_obj->session,
-            &auth_entity_obj_session_handle);
+            auth_hierarchy_obj->tr_handle, auth_hierarchy_obj->session,
+            &auth_hierarchy_obj_session_handle);
     if (rc != tool_rc_success) {
         LOG_ERR("Failed to get auth entity obj session");
         return rc;
     }
 
-    rval = Esys_PolicyAuthorizeNV(esys_context, auth_entity_obj->tr_handle,
-        esys_tr_nv_index, policy_session, auth_entity_obj_session_handle,
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_PolicyAuthorizeNV_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index, policy_session);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_PolicyAuthorizeNV_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_policyauthorizenv_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_index, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_policyauthorizenv_free_name1_name2;
+        }
+
+        TPM2B_NAME *name3 = NULL;
+        rc = tpm2_tr_get_name(esys_context, policy_session, &name3);
+        if (rc != tool_rc_success) {
+            goto tpm2_policyauthorizenv_free_name1_name2_name3;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, name3,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_policyauthorizenv_free_name1_name2_name3:
+        Esys_Free(name3);
+tpm2_policyauthorizenv_free_name1_name2:
+        Esys_Free(name2);
+tpm2_policyauthorizenv_free_name1:
+        Esys_Free(name1);
+        goto tpm2_policyauthorizenv_skip_esapi_call;
+    }
+
+    rval = Esys_PolicyAuthorizeNV(esys_context, auth_hierarchy_obj->tr_handle,
+        esys_tr_nv_index, policy_session, auth_hierarchy_obj_session_handle,
         ESYS_TR_NONE, ESYS_TR_NONE);
     if (rval != TSS2_RC_SUCCESS) {
         LOG_PERR(Esys_PolicyAuthorizeNV, rval);
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_policyauthorizenv_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_policy_nv(ESYS_CONTEXT *esys_context,
-    tpm2_loaded_object *auth_entity_obj, TPM2_HANDLE nv_index,
+    tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
     ESYS_TR policy_session, const TPM2B_OPERAND *operand_b, UINT16 offset,
-    TPM2_EO operation) {
+    TPM2_EO operation, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_index;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
@@ -462,14 +596,69 @@ tool_rc tpm2_policy_nv(ESYS_CONTEXT *esys_context,
 
     ESYS_TR auth_entity_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
-            auth_entity_obj->tr_handle, auth_entity_obj->session,
+            auth_hierarchy_obj->tr_handle, auth_hierarchy_obj->session,
             &auth_entity_obj_session_handle);
     if (rc != tool_rc_success) {
         LOG_ERR("Failed to get auth entity obj session");
         return rc;
     }
 
-    rval = Esys_PolicyNV(esys_context, auth_entity_obj->tr_handle,
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_PolicyNV_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index, policy_session, operand_b,
+            offset, operation);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_PolicyNV_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_policynv_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_index, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_policynv_free_name1_name2;
+        }
+
+        TPM2B_NAME *name3 = NULL;
+        rc = tpm2_tr_get_name(esys_context, policy_session, &name3);
+        if (rc != tool_rc_success) {
+            goto tpm2_policynv_free_name1_name2_name3;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, name3,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_policynv_free_name1_name2_name3:
+        Esys_Free(name3);
+tpm2_policynv_free_name1_name2:
+        Esys_Free(name2);
+tpm2_policynv_free_name1:
+        Esys_Free(name1);
+        goto tpm2_policynv_skip_esapi_out;
+    }
+
+    rval = Esys_PolicyNV(esys_context, auth_hierarchy_obj->tr_handle,
         esys_tr_nv_index, policy_session, auth_entity_obj_session_handle,
         ESYS_TR_NONE, ESYS_TR_NONE, operand_b, offset, operation);
     if (rval != TSS2_RC_SUCCESS) {
@@ -477,7 +666,8 @@ tool_rc tpm2_policy_nv(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_policynv_skip_esapi_out:
+    return rc;
 }
 
 tool_rc tpm2_policy_countertimer(ESYS_CONTEXT *esys_context,
@@ -498,7 +688,7 @@ tool_rc tpm2_policy_secret(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_entity_obj, ESYS_TR policy_session,
         INT32 expiration, TPMT_TK_AUTH **policy_ticket,
         TPM2B_TIMEOUT **timeout, TPM2B_NONCE *nonce_tpm,
-        TPM2B_NONCE *policy_qualifier) {
+        TPM2B_NONCE *policy_qualifier, TPM2B_DIGEST *cp_hash) {
 
     const TPM2B_DIGEST *cp_hash_a = NULL;
 
@@ -511,6 +701,53 @@ tool_rc tpm2_policy_secret(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_PolicySecret_Prepare(sys_context,
+            auth_entity_obj->handle, policy_session, nonce_tpm, cp_hash_a,
+            policy_qualifier, expiration);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_PolicySecret_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_entity_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_policysecret_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, policy_session, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_policysecret_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_entity_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_entity_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_policysecret_free_name1_name2:
+        Esys_Free(name2);
+tpm2_policysecret_free_name1:
+        Esys_Free(name1);
+        goto tpm2_policysecret_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_PolicySecret(esys_context, auth_entity_obj->tr_handle,
             policy_session, auth_entity_obj_session_handle, ESYS_TR_NONE,
             ESYS_TR_NONE, nonce_tpm, cp_hash_a, policy_qualifier, expiration, timeout,
@@ -520,7 +757,8 @@ tool_rc tpm2_policy_secret(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_policysecret_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_policy_getdigest(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
@@ -623,7 +861,8 @@ tool_rc tpm2_mu_tpmt_public_marshal(TPMT_PUBLIC const *src, uint8_t buffer[],
 tool_rc tpm2_evictcontrol(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj,
         tpm2_loaded_object *to_persist_key_obj,
-        TPMI_DH_PERSISTENT persistent_handle, ESYS_TR *new_object_handle) {
+        TPMI_DH_PERSISTENT persistent_handle, ESYS_TR *new_object_handle,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -631,6 +870,54 @@ tool_rc tpm2_evictcontrol(ESYS_CONTEXT *esys_context,
             &shandle1);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_EvictControl_Prepare(sys_context,
+            auth_hierarchy_obj->handle, to_persist_key_obj->handle,
+            persistent_handle);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_EvictControl_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_evictcontrol_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, to_persist_key_obj->tr_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_evictcontrol_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_evictcontrol_free_name1_name2:
+        Esys_Free(name2);
+tpm2_evictcontrol_free_name1:
+        Esys_Free(name1);
+        goto tpm2_evictcontrol_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_EvictControl(esys_context, auth_hierarchy_obj->tr_handle,
@@ -641,7 +928,8 @@ tool_rc tpm2_evictcontrol(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_evictcontrol_skip_esapi_call:
+    return rc;
 }
 
 /* This function addresses ESAPI change that changes parameter type from
@@ -768,7 +1056,8 @@ tool_rc tpm2_tr_set_auth(ESYS_CONTEXT *esys_context, ESYS_TR handle,
 tool_rc tpm2_activatecredential(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *activatehandleobj, tpm2_loaded_object *keyhandleobj,
         const TPM2B_ID_OBJECT *credential_blob,
-        const TPM2B_ENCRYPTED_SECRET *secret, TPM2B_DIGEST **cert_info) {
+        const TPM2B_ENCRYPTED_SECRET *secret, TPM2B_DIGEST **cert_info,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR keyobj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -785,6 +1074,53 @@ tool_rc tpm2_activatecredential(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_ActivateCredential_Prepare(sys_context,
+            activatehandleobj->handle, keyhandleobj->handle, credential_blob,
+            secret);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_ActivateCredential_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, activatehandleobj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_activatecredential_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, keyhandleobj->tr_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_activatecredential_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(activatehandleobj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(activatehandleobj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_activatecredential_free_name1_name2:
+        Esys_Free(name2);
+tpm2_activatecredential_free_name1:
+        Esys_Free(name1);
+        goto tpm2_activatecredential_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_ActivateCredential(esys_context,
             activatehandleobj->tr_handle, keyhandleobj->tr_handle,
             activateobj_session_handle, keyobj_session_handle, ESYS_TR_NONE,
@@ -795,7 +1131,8 @@ tool_rc tpm2_activatecredential(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
-    return tool_rc_success;
+tpm2_activatecredential_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_create(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
@@ -803,13 +1140,51 @@ tool_rc tpm2_create(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
         const TPM2B_DATA *outside_info, const TPML_PCR_SELECTION *creation_pcr,
         TPM2B_PRIVATE **out_private, TPM2B_PUBLIC **out_public,
         TPM2B_CREATION_DATA **creation_data, TPM2B_DIGEST **creation_hash,
-        TPMT_TK_CREATION **creation_ticket) {
+        TPMT_TK_CREATION **creation_ticket, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, parent_obj->tr_handle,
             parent_obj->session, &shandle1);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Create_Prepare(sys_context, parent_obj->handle,
+            in_sensitive, in_public, outside_info, creation_pcr);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Create_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, parent_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_create_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(parent_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(parent_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_create_free_name1:
+        Esys_Free(name1);
+        goto tpm2_create_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_Create(esys_context, parent_obj->tr_handle, shandle1,
@@ -821,20 +1196,60 @@ tool_rc tpm2_create(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_create_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_create_loaded(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *parent_obj,
         const TPM2B_SENSITIVE_CREATE *in_sensitive,
         const TPM2B_TEMPLATE *in_public, ESYS_TR *object_handle,
-        TPM2B_PRIVATE **out_private, TPM2B_PUBLIC **out_public) {
+        TPM2B_PRIVATE **out_private, TPM2B_PUBLIC **out_public,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, parent_obj->tr_handle,
             parent_obj->session, &shandle1);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_CreateLoaded_Prepare(sys_context,
+            parent_obj->handle, in_sensitive, in_public);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_CreateLoaded_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, parent_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_createloaded_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(parent_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(parent_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_createloaded_free_name1:
+        Esys_Free(name1);
+        goto tpm2_createloaded_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_CreateLoaded(esys_context, parent_obj->tr_handle,
@@ -844,19 +1259,67 @@ tool_rc tpm2_create_loaded(ESYS_CONTEXT *esys_context,
         LOG_PERR(Esys_CreateLoaded, rval);
         return tool_rc_from_tpm(rval);
     }
-
-    return tool_rc_success;
+tpm2_createloaded_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_object_change_auth(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *parent_object, tpm2_loaded_object *object,
-        const TPM2B_AUTH *new_auth, TPM2B_PRIVATE **out_private) {
+        const TPM2B_AUTH *new_auth, TPM2B_PRIVATE **out_private,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, object->tr_handle,
             object->session, &shandle1);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_ObjectChangeAuth_Prepare(sys_context,
+            object->handle, parent_object->handle, new_auth);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_ObjectChangeAuth_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, object->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_objectchangeauth_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, parent_object->tr_handle,
+            &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_objectchangeauth_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(object->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(object->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_objectchangeauth_free_name1_name2:
+        Esys_Free(name2);
+tpm2_objectchangeauth_free_name1:
+        Esys_Free(name1);
+        goto tpm2_objectchangeauth_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_ObjectChangeAuth(esys_context, object->tr_handle,
@@ -866,18 +1329,55 @@ tool_rc tpm2_object_change_auth(ESYS_CONTEXT *esys_context,
         LOG_PERR(Esys_ObjectChangeAuth, rval);
         return tool_rc_from_tpm(rval);
     }
-
-    return tool_rc_success;
+tpm2_objectchangeauth_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nv_change_auth(ESYS_CONTEXT *esys_context, tpm2_loaded_object *nv,
-        const TPM2B_AUTH *new_auth) {
+        const TPM2B_AUTH *new_auth, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, nv->tr_handle,
             nv->session, &shandle1);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_NV_ChangeAuth_Prepare(sys_context, nv->handle,
+            new_auth);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_ChangeAuth_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, nv->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvchangeauth_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(nv->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(nv->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvchangeauth_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvchangeauth_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_NV_ChangeAuth(esys_context, nv->tr_handle, shandle1,
@@ -887,17 +1387,56 @@ tool_rc tpm2_nv_change_auth(ESYS_CONTEXT *esys_context, tpm2_loaded_object *nv,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvchangeauth_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_hierarchy_change_auth(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *hierarchy, const TPM2B_AUTH *new_auth) {
+        tpm2_loaded_object *hierarchy, const TPM2B_AUTH *new_auth,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, hierarchy->tr_handle,
             hierarchy->session, &shandle1);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_HierarchyChangeAuth_Prepare(sys_context,
+            hierarchy->handle, new_auth);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_HierarchyChangeAuth_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, hierarchy->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_hierarchychangeauth_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(hierarchy->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(hierarchy->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_hierarchychangeauth_free_name1:
+        Esys_Free(name1);
+        goto tpm2_hierarchychangeauth_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_HierarchyChangeAuth(esys_context, hierarchy->tr_handle,
@@ -907,13 +1446,14 @@ tool_rc tpm2_hierarchy_change_auth(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_hierarchychangeauth_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_certify(ESYS_CONTEXT *ectx, tpm2_loaded_object *certifiedkey_obj,
         tpm2_loaded_object *signingkey_obj, TPM2B_DATA *qualifying_data,
         TPMT_SIG_SCHEME *scheme, TPM2B_ATTEST **certify_info,
-        TPMT_SIGNATURE **signature) {
+        TPMT_SIGNATURE **signature, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR certifiedkey_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(ectx, certifiedkey_obj->tr_handle,
@@ -931,6 +1471,51 @@ tool_rc tpm2_certify(ESYS_CONTEXT *ectx, tpm2_loaded_object *certifiedkey_obj,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(ectx, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Certify_Prepare(sys_context,
+        certifiedkey_obj->handle, signingkey_obj->handle, qualifying_data, scheme);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Certify_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(ectx, certifiedkey_obj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_certify_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(ectx, signingkey_obj->tr_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_certify_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(certifiedkey_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(certifiedkey_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_certify_free_name1_name2:
+        Esys_Free(name2);
+tpm2_certify_free_name1:
+        Esys_Free(name1);
+        goto tpm2_certify_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_Certify(ectx, certifiedkey_obj->tr_handle,
             signingkey_obj->tr_handle, certifiedkey_session_handle,
             signingkey_session_handle, ESYS_TR_NONE, qualifying_data, scheme,
@@ -941,18 +1526,57 @@ tool_rc tpm2_certify(ESYS_CONTEXT *ectx, tpm2_loaded_object *certifiedkey_obj,
         return rc;
     }
 
-    return tool_rc_success;
+tpm2_certify_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_rsa_decrypt(ESYS_CONTEXT *ectx, tpm2_loaded_object *keyobj,
         const TPM2B_PUBLIC_KEY_RSA *cipher_text, const TPMT_RSA_DECRYPT *scheme,
-        const TPM2B_DATA *label, TPM2B_PUBLIC_KEY_RSA **message) {
+        const TPM2B_DATA *label, TPM2B_PUBLIC_KEY_RSA **message,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR keyobj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(ectx, keyobj->tr_handle,
             keyobj->session, &keyobj_session_handle);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(ectx, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_RSA_Decrypt_Prepare(sys_context, keyobj->handle,
+        cipher_text, scheme, label);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_RSA_Decrypt_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(ectx, keyobj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_rsadecrypt_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(keyobj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(keyobj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_rsadecrypt_free_name1:
+        Esys_Free(name1);
+        goto tpm2_rsadecrypt_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_RSA_Decrypt(ectx, keyobj->tr_handle,
@@ -963,7 +1587,8 @@ tool_rc tpm2_rsa_decrypt(ESYS_CONTEXT *ectx, tpm2_loaded_object *keyobj,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_rsadecrypt_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_rsa_encrypt(ESYS_CONTEXT *ectx, tpm2_loaded_object *keyobj,
@@ -983,7 +1608,7 @@ tool_rc tpm2_rsa_encrypt(ESYS_CONTEXT *ectx, tpm2_loaded_object *keyobj,
 
 tool_rc tpm2_load(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parentobj,
         const TPM2B_PRIVATE *in_private, const TPM2B_PUBLIC *in_public,
-        ESYS_TR *object_handle) {
+        ESYS_TR *object_handle, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR parent_object_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, parentobj->tr_handle,
@@ -991,6 +1616,44 @@ tool_rc tpm2_load(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parentobj,
     if (rc != tool_rc_success) {
         LOG_ERR("Failed to get parent object session handle");
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Load_Prepare(sys_context, parentobj->handle,
+            in_private, in_public);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Load_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, parentobj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_load_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(parentobj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(parentobj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_load_free_name1:
+        Esys_Free(name1);
+        goto tpm2_load_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_Load(esys_context, parentobj->tr_handle,
@@ -1001,11 +1664,12 @@ tool_rc tpm2_load(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parentobj,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_load_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_clear(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy) {
+tpm2_loaded_object *auth_hierarchy, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1015,17 +1679,59 @@ tool_rc tpm2_clear(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Clear_Prepare(sys_context,
+            auth_hierarchy->handle);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Clear_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_clear_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(auth_hierarchy->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_clear_free_name1:
+        Esys_Free(name1);
+        goto tpm2_clear_skip_esapi_call;
+    }
+
+
     TSS2_RC rval = Esys_Clear(esys_context, auth_hierarchy->tr_handle, shandle1,
             ESYS_TR_NONE, ESYS_TR_NONE);
     if (rval != TPM2_RC_SUCCESS && rval != TPM2_RC_INITIALIZE) {
         LOG_PERR(Esys_Clear, rval);
         return tool_rc_from_tpm(rval);
     }
-    return tool_rc_success;
+
+tpm2_clear_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_clearcontrol(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy, TPMI_YES_NO disable_clear) {
+        tpm2_loaded_object *auth_hierarchy, TPMI_YES_NO disable_clear,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1034,21 +1740,58 @@ tool_rc tpm2_clearcontrol(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_ClearControl_Prepare(sys_context,
+            auth_hierarchy->handle, disable_clear);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_ClearControl_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_clearcontrol_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(auth_hierarchy->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_clearcontrol_free_name1:
+        Esys_Free(name1);
+        goto tpm2_clearcontrol_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_ClearControl(esys_context, auth_hierarchy->tr_handle,
             shandle, ESYS_TR_NONE, ESYS_TR_NONE, disable_clear);
     if (rval != TPM2_RC_SUCCESS && rval != TPM2_RC_INITIALIZE) {
         LOG_PERR(Esys_ClearControl, rval);
         return tool_rc_from_tpm(rval);
     }
-
-    return tool_rc_success;
+tpm2_clearcontrol_skip_esapi_call:
+    return rc;
 }
 
-tool_rc tpm2_dictionarylockout(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy,
-        bool clear_lockout,
-        bool setup_parameters, UINT32 max_tries, UINT32 recovery_time,
-        UINT32 lockout_recovery_time) {
+tool_rc tpm2_dictionarylockout_setup(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *auth_hierarchy, UINT32 max_tries,
+        UINT32 recovery_time, UINT32 lockout_recovery_time,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1058,41 +1801,125 @@ tool_rc tpm2_dictionarylockout(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
-    /*
-     * If setup params and clear lockout are both required, clear lockout should
-     * precede parameters setup.
-     */
-    TPM2_RC rval;
-    if (clear_lockout) {
-        LOG_INFO("Resetting dictionary lockout state.");
-        rval = Esys_DictionaryAttackLockReset(esys_context,
-                auth_hierarchy->tr_handle, shandle1, ESYS_TR_NONE,
-                ESYS_TR_NONE);
-        if (rval != TPM2_RC_SUCCESS) {
-            LOG_PERR(Esys_DictionaryAttackLockReset, rval);
-            return tool_rc_from_tpm(rval);
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
         }
+
+        TSS2_RC rval = Tss2_Sys_DictionaryAttackParameters_Prepare(sys_context,
+            auth_hierarchy->handle, max_tries, recovery_time,
+            lockout_recovery_time);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_DictionaryAttackParameters_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_dictionary_parameters_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(auth_hierarchy->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_dictionary_parameters_free_name1:
+        Esys_Free(name1);
+        goto tpm2_dictionary_parameters_skip_esapi_call;
     }
 
-    if (setup_parameters) {
-        LOG_INFO("Setting up Dictionary Lockout parameters.");
-        rval = Esys_DictionaryAttackParameters(esys_context,
-                auth_hierarchy->tr_handle, shandle1, ESYS_TR_NONE, ESYS_TR_NONE,
-                max_tries, recovery_time, lockout_recovery_time);
-        if (rval != TPM2_RC_SUCCESS) {
-            LOG_PERR(Esys_DictionaryAttackParameters, rval);
-            return tool_rc_from_tpm(rval);
-        }
+    LOG_INFO("Setting up Dictionary Lockout parameters.");
+    TPM2_RC rval = Esys_DictionaryAttackParameters(esys_context,
+            auth_hierarchy->tr_handle, shandle1, ESYS_TR_NONE, ESYS_TR_NONE,
+            max_tries, recovery_time, lockout_recovery_time);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Esys_DictionaryAttackParameters, rval);
+        return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_dictionary_parameters_skip_esapi_call:
+    return rc;
+}
+
+tool_rc tpm2_dictionarylockout_reset(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *auth_hierarchy, TPM2B_DIGEST *cp_hash) {
+
+    ESYS_TR shandle1 = ESYS_TR_NONE;
+    tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+            auth_hierarchy->tr_handle, auth_hierarchy->session, &shandle1);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Couldn't get shandle for lockout hierarchy");
+        return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_DictionaryAttackLockReset_Prepare(sys_context,
+            auth_hierarchy->handle);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_DictionaryAttackLockReset_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_dictionary_attack_reset_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(auth_hierarchy->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_dictionary_attack_reset_free_name1:
+        Esys_Free(name1);
+        goto tpm2_dictionary_attack_reset_skip_esapi_call;
+    }
+
+    LOG_INFO("Resetting dictionary lockout state.");
+    TPM2_RC rval = Esys_DictionaryAttackLockReset(esys_context,
+            auth_hierarchy->tr_handle, shandle1, ESYS_TR_NONE,
+            ESYS_TR_NONE);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Esys_DictionaryAttackLockReset, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+tpm2_dictionary_attack_reset_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_duplicate(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *duplicable_key, ESYS_TR new_parent_handle,
+        tpm2_loaded_object *duplicable_key, tpm2_loaded_object *new_parent,
         const TPM2B_DATA *in_key, const TPMT_SYM_DEF_OBJECT *sym_alg,
         TPM2B_DATA **out_key, TPM2B_PRIVATE **duplicate,
-        TPM2B_ENCRYPTED_SECRET **encrypted_seed) {
+        TPM2B_ENCRYPTED_SECRET **encrypted_seed, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1102,35 +1929,140 @@ tool_rc tpm2_duplicate(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Duplicate_Prepare(sys_context,
+            duplicable_key->handle, new_parent->handle, in_key, sym_alg);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Duplicate_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, duplicable_key->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_duplicate_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, new_parent->tr_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_duplicate_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(duplicable_key->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(duplicable_key->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_duplicate_free_name1_name2:
+        Esys_Free(name2);
+tpm2_duplicate_free_name1:
+        Esys_Free(name1);
+        goto tpm2_duplicate_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_Duplicate(esys_context, duplicable_key->tr_handle,
-            new_parent_handle, shandle1, ESYS_TR_NONE, ESYS_TR_NONE, in_key,
+            new_parent->tr_handle, shandle1, ESYS_TR_NONE, ESYS_TR_NONE, in_key,
             sym_alg, out_key, duplicate, encrypted_seed);
     if (rval != TPM2_RC_SUCCESS) {
         LOG_PERR(Esys_Duplicate, rval);
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_duplicate_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_encryptdecrypt(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *encryption_key_obj, TPMI_YES_NO decrypt,
         TPMI_ALG_SYM_MODE mode, const TPM2B_IV *iv_in,
         const TPM2B_MAX_BUFFER *input_data, TPM2B_MAX_BUFFER **output_data,
-        TPM2B_IV **iv_out, ESYS_TR shandle1, unsigned *version) {
+        TPM2B_IV **iv_out, TPM2B_DIGEST *cp_hash) {
+
+    ESYS_TR shandle1 = ESYS_TR_NONE;
+    tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+    encryption_key_obj->tr_handle, encryption_key_obj->session, &shandle1);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get shandle");
+        return rc;
+    }
+
+    /* Keep track of which version you ran for error reporting.*/
+    unsigned version = 2;
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_EncryptDecrypt2_Prepare(sys_context,
+        encryption_key_obj->handle, input_data, decrypt, mode, iv_in);
+        if (tpm2_error_get(rval) == TPM2_RC_COMMAND_CODE) {
+            version = 1;
+            rval = Tss2_Sys_EncryptDecrypt_Prepare(sys_context,
+            encryption_key_obj->handle, decrypt, mode, iv_in, input_data);
+        }
+
+        if (rval != TPM2_RC_SUCCESS) {
+            if (version == 2) {
+                LOG_PERR(Tss2_Sys_EncryptDecrypt2_Prepare, rval);
+            } else {
+                LOG_PERR(Tss2_Sys_EncryptDecrypt_Prepare, rval);
+            }
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, encryption_key_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_encryptdecrypt_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(encryption_key_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(encryption_key_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_encryptdecrypt_free_name1:
+        Esys_Free(name1);
+        goto tpm2_encryptdecrypt_skip_esapi_call;
+    }
 
     TSS2_RC rval = Esys_EncryptDecrypt2(esys_context,
             encryption_key_obj->tr_handle, shandle1, ESYS_TR_NONE, ESYS_TR_NONE,
             input_data, decrypt, mode, iv_in, output_data, iv_out);
     if (tpm2_error_get(rval) == TPM2_RC_COMMAND_CODE) {
-        *version = 1;
+        version = 1;
         rval = Esys_EncryptDecrypt(esys_context, encryption_key_obj->tr_handle,
                 shandle1, ESYS_TR_NONE, ESYS_TR_NONE, decrypt, mode, iv_in,
                 input_data, output_data, iv_out);
     }
 
     if (rval != TPM2_RC_SUCCESS) {
-        if (*version == 2) {
+        if (version == 2) {
             LOG_PERR(Esys_EncryptDecrypt2, rval);
         } else {
             LOG_PERR(Esys_EncryptDecrypt, rval);
@@ -1138,12 +2070,13 @@ tool_rc tpm2_encryptdecrypt(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_encryptdecrypt_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_hierarchycontrol(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy, TPMI_RH_ENABLES enable,
-        TPMI_YES_NO state) {
+        TPMI_YES_NO state, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1153,6 +2086,45 @@ tool_rc tpm2_hierarchycontrol(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_HierarchyControl_Prepare(sys_context,
+        auth_hierarchy->handle, enable, state);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_HierarchyControl_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_hierarchycontrol_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(auth_hierarchy->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_hierarchycontrol_free_name1:
+        Esys_Free(name1);
+        goto tpm2_hierarchycontrol_skip_esapi_call;
+    }
+
+
     TSS2_RC rval = Esys_HierarchyControl(esys_context, auth_hierarchy->tr_handle,
             shandle, ESYS_TR_NONE, ESYS_TR_NONE, enable, state);
     if (rval != TPM2_RC_SUCCESS && rval != TPM2_RC_INITIALIZE) {
@@ -1160,12 +2132,13 @@ tool_rc tpm2_hierarchycontrol(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_hierarchycontrol_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_hmac(ESYS_CONTEXT *esys_context, tpm2_loaded_object *hmac_key_obj,
         TPMI_ALG_HASH halg, const TPM2B_MAX_BUFFER *input_buffer,
-        TPM2B_DIGEST **out_hmac) {
+        TPM2B_DIGEST **out_hmac, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR hmac_key_obj_shandle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1176,6 +2149,44 @@ tool_rc tpm2_hmac(ESYS_CONTEXT *esys_context, tpm2_loaded_object *hmac_key_obj,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_HMAC_Prepare(sys_context, hmac_key_obj->handle,
+        input_buffer, halg);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_HMAC_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, hmac_key_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_hmac_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(hmac_key_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(hmac_key_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_hmac_free_name1:
+        Esys_Free(name1);
+        goto tpm2_hmac_skip_esapi_call;
+    }
+
     TPM2_RC rval = Esys_HMAC(esys_context, hmac_key_obj->tr_handle,
             hmac_key_obj_shandle, ESYS_TR_NONE, ESYS_TR_NONE, input_buffer,
             halg, out_hmac);
@@ -1184,7 +2195,8 @@ tool_rc tpm2_hmac(ESYS_CONTEXT *esys_context, tpm2_loaded_object *hmac_key_obj,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_hmac_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_hmac_start(ESYS_CONTEXT *esys_context,
@@ -1263,7 +2275,8 @@ tool_rc tpm2_hmac_sequencecomplete(ESYS_CONTEXT *esys_context,
 tool_rc tpm2_import(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
         const TPM2B_DATA *encryption_key, const TPM2B_PUBLIC *object_public,
         const TPM2B_PRIVATE *duplicate, const TPM2B_ENCRYPTED_SECRET *in_sym_seed,
-        const TPMT_SYM_DEF_OBJECT *symmetric_alg, TPM2B_PRIVATE **out_private) {
+        const TPMT_SYM_DEF_OBJECT *symmetric_alg, TPM2B_PRIVATE **out_private,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR parentobj_shandle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, parent_obj->tr_handle,
@@ -1271,6 +2284,44 @@ tool_rc tpm2_import(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
     if (rc != tool_rc_success) {
         LOG_ERR("Couldn't get shandle for phandle");
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Import_Prepare(sys_context,
+            parent_obj->handle, encryption_key, object_public, duplicate,
+            in_sym_seed, symmetric_alg);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Import_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, parent_obj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_import_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(parent_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(parent_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_import_free_name1:
+        Esys_Free(name1);
+        goto tpm2_import_skip_esapi_call;
     }
 
     TPM2_RC rval = Esys_Import(esys_context, parent_obj->tr_handle,
@@ -1281,12 +2332,13 @@ tool_rc tpm2_import(ESYS_CONTEXT *esys_context, tpm2_loaded_object *parent_obj,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_import_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nv_definespace(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, const TPM2B_AUTH *auth,
-        const TPM2B_NV_PUBLIC *public_info) {
+        const TPM2B_NV_PUBLIC *public_info, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1298,6 +2350,45 @@ tool_rc tpm2_nv_definespace(ESYS_CONTEXT *esys_context,
     }
 
     ESYS_TR nvHandle;
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_NV_DefineSpace_Prepare(sys_context,
+            auth_hierarchy_obj->handle, auth, public_info);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_DefineSpace_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvdefinespace_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvdefinespace_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvdefinespace_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_NV_DefineSpace(esys_context,
             auth_hierarchy_obj->tr_handle, shandle1, ESYS_TR_NONE, ESYS_TR_NONE,
             auth, public_info, &nvHandle);
@@ -1308,11 +2399,13 @@ tool_rc tpm2_nv_definespace(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvdefinespace_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nv_increment(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index) {
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR auth_hierarchy_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1332,6 +2425,52 @@ tool_rc tpm2_nv_increment(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_Increment_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_Increment_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvincrement_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_index, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvincrement_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvincrement_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvincrement_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvincrement_skip_esapi_call;
+    }
+
     rval = Esys_NV_Increment(esys_context, auth_hierarchy_obj->tr_handle,
             esys_tr_nv_index, auth_hierarchy_obj_session_handle, ESYS_TR_NONE,
             ESYS_TR_NONE);
@@ -1339,11 +2478,13 @@ tool_rc tpm2_nv_increment(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvincrement_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvreadlock(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index) {
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_handle;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
@@ -1360,6 +2501,52 @@ tool_rc tpm2_nvreadlock(ESYS_CONTEXT *esys_context,
     if (rc != tool_rc_success) {
         LOG_ERR("Failed to get shandle");
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_ReadLock_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_ReadLock_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_readlock_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvreadlock_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvreadlock_free_name1_name2:
+        Esys_Free(name2);
+tpm2_readlock_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvreadlock_skip_esapi_call;
     }
 
     rval = Esys_NV_ReadLock(esys_context, auth_hierarchy_obj->tr_handle,
@@ -1370,11 +2557,13 @@ tool_rc tpm2_nvreadlock(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvreadlock_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvwritelock(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index) {
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_handle;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
@@ -1393,6 +2582,53 @@ tool_rc tpm2_nvwritelock(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_WriteLock_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_WriteLock_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvwritelock_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvwritelock_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvwritelock_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvwritelock_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvwritelock_skip_esapi_call;
+    }
+
+
     rval = Esys_NV_WriteLock(esys_context, auth_hierarchy_obj->tr_handle,
             esys_tr_nv_handle, auth_hierarchy_obj_session_handle, ESYS_TR_NONE,
             ESYS_TR_NONE);
@@ -1401,11 +2637,12 @@ tool_rc tpm2_nvwritelock(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvwritelock_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvglobalwritelock(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj) {
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR auth_hierarchy_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1416,6 +2653,44 @@ tool_rc tpm2_nvglobalwritelock(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_NV_GlobalWriteLock_Prepare(sys_context,
+            auth_hierarchy_obj->handle);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_GlobalWriteLock_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_globalnvwritelock_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_globalnvwritelock_free_name1:
+        Esys_Free(name1);
+        goto tpm2_globalnvwritelock_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_NV_GlobalWriteLock(esys_context, auth_hierarchy_obj->tr_handle,
             auth_hierarchy_obj_session_handle, ESYS_TR_NONE, ESYS_TR_NONE);
     if (rval != TPM2_RC_SUCCESS) {
@@ -1423,7 +2698,8 @@ tool_rc tpm2_nvglobalwritelock(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_globalnvwritelock_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_tr_from_tpm_public(ESYS_CONTEXT *esys_context, TPM2_HANDLE handle, ESYS_TR *tr_handle) {
@@ -1440,11 +2716,11 @@ tool_rc tpm2_tr_from_tpm_public(ESYS_CONTEXT *esys_context, TPM2_HANDLE handle, 
 
 tool_rc tpm2_nvsetbits(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
-        UINT64 bits) {
+        UINT64 bits, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_handle;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
-            ESYS_TR_NONE, ESYS_TR_NONE, &esys_tr_nv_handle);
+        ESYS_TR_NONE, ESYS_TR_NONE, &esys_tr_nv_handle);
     if (rval != TPM2_RC_SUCCESS) {
         LOG_PERR(Esys_TR_FromTPMPublic, rval);
         return tool_rc_from_tpm(rval);
@@ -1452,11 +2728,57 @@ tool_rc tpm2_nvsetbits(ESYS_CONTEXT *esys_context,
 
     ESYS_TR auth_hierarchy_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
-            auth_hierarchy_obj->tr_handle, auth_hierarchy_obj->session,
-            &auth_hierarchy_obj_session_handle);
+        auth_hierarchy_obj->tr_handle, auth_hierarchy_obj->session,
+        &auth_hierarchy_obj_session_handle);
     if (rc != tool_rc_success) {
         LOG_ERR("Failed to get shandle");
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_SetBits_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index, bits);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_SetBits_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvsetbits_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvsetbits_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvsetbits_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvsetbits_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvsetbits_skip_esapi_call;
     }
 
     rval = Esys_NV_SetBits(esys_context, auth_hierarchy_obj->tr_handle,
@@ -1467,12 +2789,13 @@ tool_rc tpm2_nvsetbits(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvsetbits_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvextend(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
-        TPM2B_MAX_NV_BUFFER *data) {
+        TPM2B_MAX_NV_BUFFER *data, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_handle;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
@@ -1491,6 +2814,52 @@ tool_rc tpm2_nvextend(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_Extend_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index, data);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_Extend_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvextend_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvextend_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvextend_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvextend_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvextend_skip_esapi_call;
+    }
+
     rval = Esys_NV_Extend(esys_context, auth_hierarchy_obj->tr_handle,
             esys_tr_nv_handle, auth_hierarchy_obj_session_handle, ESYS_TR_NONE,
             ESYS_TR_NONE, data);
@@ -1499,11 +2868,13 @@ tool_rc tpm2_nvextend(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvextend_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvundefine(ESYS_CONTEXT *esys_context,
-        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index) {
+        tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_handle;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
@@ -1522,6 +2893,52 @@ tool_rc tpm2_nvundefine(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_UndefineSpace_Prepare(sys_context,
+            auth_hierarchy_obj->handle, nv_index);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_UndefineSpace_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvundefine_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvundefine_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvundefine_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvundefine_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvundefine_skip_esapi_call;
+    }
+
     rval = Esys_NV_UndefineSpace(esys_context, auth_hierarchy_obj->tr_handle,
             esys_tr_nv_handle, auth_hierarchy_obj_session_handle, ESYS_TR_NONE,
             ESYS_TR_NONE);
@@ -1533,12 +2950,13 @@ tool_rc tpm2_nvundefine(ESYS_CONTEXT *esys_context,
 
     LOG_INFO("Success to release NV area at index 0x%x.", nv_index);
 
-    return tool_rc_success;
+tpm2_nvundefine_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvundefinespecial(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nv_index,
-        tpm2_session *policy_session) {
+        tpm2_session *policy_session, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR esys_tr_nv_handle;
     TSS2_RC rval = Esys_TR_FromTPMPublic(esys_context, nv_index, ESYS_TR_NONE,
@@ -1559,6 +2977,52 @@ tool_rc tpm2_nvundefinespecial(ESYS_CONTEXT *esys_context,
 
     ESYS_TR policy_session_handle = tpm2_session_get_handle(policy_session);
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_UndefineSpaceSpecial_Prepare(sys_context, nv_index,
+            auth_hierarchy_obj->handle);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_UndefineSpaceSpecial_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvundefinespecial_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle,
+            &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvundefinespecial_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvundefinespecial_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvundefinespecial_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvundefinespecial_skip_esapi_call;
+    }
+
     rval = Esys_NV_UndefineSpaceSpecial(esys_context,
             esys_tr_nv_handle,
             auth_hierarchy_obj->tr_handle,
@@ -1567,18 +3031,19 @@ tool_rc tpm2_nvundefinespecial(ESYS_CONTEXT *esys_context,
             ESYS_TR_NONE);
     if (rval != TPM2_RC_SUCCESS) {
         LOG_ERR("Failed to release NV area at index 0x%X", nv_index);
-        LOG_PERR(Esys_NV_UndefineSpace, rval);
+        LOG_PERR(Esys_NV_UndefineSpaceSpecial, rval);
         return tool_rc_from_tpm(rval);
     }
 
     LOG_INFO("Success to release NV area at index 0x%x.", nv_index);
 
-    return tool_rc_success;
+tpm2_nvundefinespecial_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvwrite(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_hierarchy_obj, TPM2_HANDLE nvindex,
-        const TPM2B_MAX_NV_BUFFER *data, UINT16 offset) {
+        const TPM2B_MAX_NV_BUFFER *data, UINT16 offset, TPM2B_DIGEST *cp_hash) {
 
     // Convert TPM2_HANDLE ctx.nv_index to an ESYS_TR
     ESYS_TR esys_tr_nv_index;
@@ -1598,6 +3063,50 @@ tool_rc tpm2_nvwrite(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_Write_Prepare(sys_context, auth_hierarchy_obj->handle,
+            nvindex, data, offset);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_Write_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, auth_hierarchy_obj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvwrite_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_index, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvwrite_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(auth_hierarchy_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(auth_hierarchy_obj->session), cp_hash);
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvwrite_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvwrite_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvwrite_skip_esapi_call;
+    }
+
     rval = Esys_NV_Write(esys_context, auth_hierarchy_obj->tr_handle,
             esys_tr_nv_index, auth_hierarchy_obj_session_handle, ESYS_TR_NONE,
             ESYS_TR_NONE, data, offset);
@@ -1609,7 +3118,9 @@ tool_rc tpm2_nvwrite(ESYS_CONTEXT *esys_context,
 
     LOG_INFO("Success to write NV area at index 0x%x offset 0x%x.", nvindex,
             offset);
-    return tool_rc_success;
+
+tpm2_nvwrite_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_pcr_allocate(ESYS_CONTEXT *esys_context,
@@ -1652,7 +3163,8 @@ tool_rc tpm2_pcr_allocate(ESYS_CONTEXT *esys_context,
 
 tool_rc tpm2_sign(ESYS_CONTEXT *esys_context, tpm2_loaded_object *signingkey_obj,
         TPM2B_DIGEST *digest, TPMT_SIG_SCHEME *in_scheme,
-        TPMT_TK_HASHCHECK *validation, TPMT_SIGNATURE **signature) {
+        TPMT_TK_HASHCHECK *validation, TPMT_SIGNATURE **signature,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR signingkey_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1660,6 +3172,44 @@ tool_rc tpm2_sign(ESYS_CONTEXT *esys_context, tpm2_loaded_object *signingkey_obj
             &signingkey_obj_session_handle);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Sign_Prepare(sys_context,
+        signingkey_obj->handle, digest, in_scheme, validation);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Sign_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, signingkey_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_sign_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(signingkey_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(signingkey_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_sign_free_name1:
+        Esys_Free(name1);
+        goto tpm2_sign_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_Sign(esys_context, signingkey_obj->tr_handle,
@@ -1670,15 +3220,16 @@ tool_rc tpm2_sign(ESYS_CONTEXT *esys_context, tpm2_loaded_object *signingkey_obj
         rc = tool_rc_from_tpm(rval);
         return rc;
     }
-
-    return tool_rc_success;
+tpm2_sign_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_nvcertify(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *signingkey_obj, tpm2_loaded_object *nvindex_authobj,
     TPM2_HANDLE nv_index, UINT16 offset, UINT16 size,
     TPMT_SIG_SCHEME *in_scheme, TPM2B_ATTEST **certify_info,
-    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier) {
+    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier,
+    TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR signingkey_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1704,6 +3255,60 @@ tool_rc tpm2_nvcertify(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        rval = Tss2_Sys_NV_Certify_Prepare(sys_context, signingkey_obj->handle,
+            nvindex_authobj->handle, nv_index, policy_qualifier, in_scheme,
+            size, offset);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_NV_Certify_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, signingkey_obj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvcertify_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, nvindex_authobj->tr_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvcertify_free_name1_name2;
+        }
+
+        TPM2B_NAME *name3 = NULL;
+        rc = tpm2_tr_get_name(esys_context, esys_tr_nv_index, &name3);
+        if (rc != tool_rc_success) {
+            goto tpm2_nvcertify_free_name1_name2_name3;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(signingkey_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, name3,
+            tpm2_session_get_authhash(signingkey_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_nvcertify_free_name1_name2_name3:
+        Esys_Free(name3);
+tpm2_nvcertify_free_name1_name2:
+        Esys_Free(name2);
+tpm2_nvcertify_free_name1:
+        Esys_Free(name1);
+        goto tpm2_nvcertify_skip_esapi_call;
+    }
+
     rval = Esys_NV_Certify(esys_context, signingkey_obj->tr_handle,
         nvindex_authobj->tr_handle, esys_tr_nv_index,
         signingkey_obj_session_handle, nvindex_authobj_session_handle,
@@ -1714,14 +3319,16 @@ tool_rc tpm2_nvcertify(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_nvcertify_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_certifycreation(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *signingkey_obj, tpm2_loaded_object *certifiedkey_obj,
     TPM2B_DIGEST *creation_hash, TPMT_SIG_SCHEME *in_scheme,
     TPMT_TK_CREATION *creation_ticket, TPM2B_ATTEST **certify_info,
-    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier) {
+    TPMT_SIGNATURE **signature, TPM2B_DATA *policy_qualifier,
+    TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR signingkey_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1729,6 +3336,52 @@ tool_rc tpm2_certifycreation(ESYS_CONTEXT *esys_context,
             &signingkey_obj_session_handle);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_CertifyCreation_Prepare(sys_context,
+        signingkey_obj->handle, certifiedkey_obj->handle, policy_qualifier,
+        creation_hash, in_scheme, creation_ticket);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_CertifyCreation_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, signingkey_obj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_certifycreation_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(esys_context, certifiedkey_obj->tr_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_certifycreation_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(signingkey_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(signingkey_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_certifycreation_free_name1_name2:
+        Esys_Free(name2);
+tpm2_certifycreation_free_name1:
+        Esys_Free(name1);
+        goto tpm2_certifycreation_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_CertifyCreation(esys_context, signingkey_obj->tr_handle,
@@ -1740,12 +3393,13 @@ tool_rc tpm2_certifycreation(ESYS_CONTEXT *esys_context,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_certifycreation_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_setprimarypolicy(ESYS_CONTEXT *esys_context,
     tpm2_loaded_object *hierarchy_object, TPM2B_DIGEST *auth_policy,
-    TPMI_ALG_HASH hash_algorithm) {
+    TPMI_ALG_HASH hash_algorithm, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR hierarchy_object_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -1755,6 +3409,44 @@ tool_rc tpm2_setprimarypolicy(ESYS_CONTEXT *esys_context,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_SetPrimaryPolicy_Prepare(sys_context,
+            hierarchy_object->handle, auth_policy, hash_algorithm);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_SetPrimaryPolicy_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, hierarchy_object->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_setprimarypolicy_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(hierarchy_object->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(hierarchy_object->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_setprimarypolicy_free_name1:
+        Esys_Free(name1);
+        goto tpm2_setprimarypolicy_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_SetPrimaryPolicy(esys_context,
         hierarchy_object->tr_handle, hierarchy_object_session_handle,
         ESYS_TR_NONE, ESYS_TR_NONE, auth_policy, hash_algorithm);
@@ -1762,14 +3454,14 @@ tool_rc tpm2_setprimarypolicy(ESYS_CONTEXT *esys_context,
         LOG_PERR(Esys_SetPrimaryPolicy, rval);
         return tool_rc_from_tpm(rval);
     }
-
-    return tool_rc_success;
+tpm2_setprimarypolicy_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_quote(ESYS_CONTEXT *esys_context, tpm2_loaded_object *quote_obj,
         TPMT_SIG_SCHEME *in_scheme, TPM2B_DATA *qualifying_data,
         TPML_PCR_SELECTION *pcr_select, TPM2B_ATTEST **quoted,
-        TPMT_SIGNATURE **signature) {
+        TPMT_SIGNATURE **signature, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR quote_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, quote_obj->tr_handle,
@@ -1779,6 +3471,43 @@ tool_rc tpm2_quote(ESYS_CONTEXT *esys_context, tpm2_loaded_object *quote_obj,
         return rc;
     }
 
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Quote_Prepare(sys_context, quote_obj->handle,
+        qualifying_data, in_scheme, pcr_select);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Quote_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, quote_obj->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_quote_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(quote_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(quote_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_quote_free_name1:
+        Esys_Free(name1);
+        goto tpm2_quote_skip_esapi_call;
+    }
+
     TSS2_RC rval = Esys_Quote(esys_context, quote_obj->tr_handle,
             quote_obj_session_handle, ESYS_TR_NONE, ESYS_TR_NONE,
             qualifying_data, in_scheme, pcr_select, quoted, signature);
@@ -1786,8 +3515,8 @@ tool_rc tpm2_quote(ESYS_CONTEXT *esys_context, tpm2_loaded_object *quote_obj,
         LOG_PERR(Esys_Quote, rval);
         return tool_rc_from_tpm(rval);
     }
-
-    return tool_rc_success;
+tpm2_quote_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_changeeps(ESYS_CONTEXT *ectx,
@@ -1831,13 +3560,51 @@ tool_rc tpm2_changepps(ESYS_CONTEXT *ectx,
 }
 
 tool_rc tpm2_unseal(ESYS_CONTEXT *esys_context, tpm2_loaded_object *sealkey_obj,
-        TPM2B_SENSITIVE_DATA **out_data) {
+        TPM2B_SENSITIVE_DATA **out_data, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR sealkey_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context, sealkey_obj->tr_handle,
             sealkey_obj->session, &sealkey_obj_session_handle);
     if (rc != tool_rc_success) {
         return rc;
+    }
+
+        if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(esys_context, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_Unseal_Prepare(sys_context,
+            sealkey_obj->handle);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_Unseal_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(esys_context, sealkey_obj->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_unseal_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(sealkey_obj->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(sealkey_obj->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_unseal_free_name1:
+        Esys_Free(name1);
+        goto tpm2_unseal_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_Unseal(esys_context, sealkey_obj->tr_handle,
@@ -1847,7 +3614,8 @@ tool_rc tpm2_unseal(ESYS_CONTEXT *esys_context, tpm2_loaded_object *sealkey_obj,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_unseal_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_incrementalselftest(ESYS_CONTEXT *ectx, const TPML_ALG *to_test,
@@ -2018,7 +3786,8 @@ tool_rc tpm2_readclock(ESYS_CONTEXT *ectx, TPMS_TIME_INFO **current_time) {
     return tool_rc_success;
 }
 
-tool_rc tpm2_setclock(ESYS_CONTEXT *ectx, tpm2_loaded_object *object, UINT64 new_time) {
+tool_rc tpm2_setclock(ESYS_CONTEXT *ectx, tpm2_loaded_object *object,
+UINT64 new_time, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(ectx,
@@ -2026,6 +3795,44 @@ tool_rc tpm2_setclock(ESYS_CONTEXT *ectx, tpm2_loaded_object *object, UINT64 new
     if (rc != tool_rc_success) {
         LOG_ERR("Couldn't get shandle for lockout hierarchy");
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(ectx, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_ClockSet_Prepare(sys_context,
+            object->handle, new_time);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_ClockSet_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(ectx, object->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_setclock_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(object->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(object->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_setclock_free_name1:
+        Esys_Free(name1);
+        goto tpm2_setclock_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_ClockSet(ectx,
@@ -2037,11 +3844,12 @@ tool_rc tpm2_setclock(ESYS_CONTEXT *ectx, tpm2_loaded_object *object, UINT64 new
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_setclock_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_clockrateadjust(ESYS_CONTEXT *ectx, tpm2_loaded_object *object,
-        TPM2_CLOCK_ADJUST rate_adjust) {
+        TPM2_CLOCK_ADJUST rate_adjust, TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR shandle1 = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(ectx,
@@ -2049,6 +3857,44 @@ tool_rc tpm2_clockrateadjust(ESYS_CONTEXT *ectx, tpm2_loaded_object *object,
     if (rc != tool_rc_success) {
         LOG_ERR("Couldn't get shandle for lockout hierarchy");
         return rc;
+    }
+
+    if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(ectx, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_ClockRateAdjust_Prepare(sys_context,
+            object->handle, rate_adjust);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_ClockRateAdjust_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(ectx, object->tr_handle,
+            &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_clockrateadjust_free_name1;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(object->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, NULL, NULL,
+            tpm2_session_get_authhash(object->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_clockrateadjust_free_name1:
+        Esys_Free(name1);
+        goto tpm2_clockrateadjust_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_ClockRateAdjust(ectx,
@@ -2060,7 +3906,8 @@ tool_rc tpm2_clockrateadjust(ESYS_CONTEXT *ectx, tpm2_loaded_object *object,
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+tpm2_clockrateadjust_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_shutdown(ESYS_CONTEXT *ectx, TPM2_SU shutdown_type) {
@@ -2082,7 +3929,8 @@ tool_rc tpm2_gettime(ESYS_CONTEXT *ectx,
         const TPM2B_DATA *qualifying_data,
         const TPMT_SIG_SCHEME *scheme,
         TPM2B_ATTEST **time_info,
-        TPMT_SIGNATURE **signature) {
+        TPMT_SIGNATURE **signature,
+        TPM2B_DIGEST *cp_hash) {
 
     ESYS_TR privacy_admin_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(ectx,
@@ -2098,6 +3946,51 @@ tool_rc tpm2_gettime(ESYS_CONTEXT *ectx,
     if (rc != tool_rc_success) {
         LOG_ERR("Couldn't get shandle for signing key");
         return rc;
+    }
+
+       if (cp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        TSS2_SYS_CONTEXT *sys_context = NULL;
+        rc = tpm2_getsapicontext(ectx, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+
+        TSS2_RC rval = Tss2_Sys_GetTime_Prepare(sys_context,
+        privacy_admin->handle, signing_object->handle, qualifying_data, scheme);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_GetTime_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        TPM2B_NAME *name1 = NULL;
+        rc = tpm2_tr_get_name(ectx, privacy_admin->tr_handle, &name1);
+        if (rc != tool_rc_success) {
+            goto tpm2_gettime_free_name1;
+        }
+
+        TPM2B_NAME *name2 = NULL;
+        rc = tpm2_tr_get_name(ectx, signing_object->tr_handle, &name2);
+        if (rc != tool_rc_success) {
+            goto tpm2_gettime_free_name1_name2;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(
+            tpm2_session_get_authhash(signing_object->session));
+        rc = tpm2_sapi_getcphash(sys_context, name1, name2, NULL,
+            tpm2_session_get_authhash(signing_object->session), cp_hash);
+
+        /*
+         * Exit here without making the ESYS call since we just need the cpHash
+         */
+tpm2_gettime_free_name1_name2:
+        Esys_Free(name2);
+tpm2_gettime_free_name1:
+        Esys_Free(name1);
+        goto tpm2_gettime_skip_esapi_call;
     }
 
     TSS2_RC rval = Esys_GetTime(
@@ -2116,5 +4009,83 @@ tool_rc tpm2_gettime(ESYS_CONTEXT *ectx,
         return tool_rc_from_tpm(rval);
     }
 
+tpm2_gettime_skip_esapi_call:
+    return rc;
+}
+
+tool_rc tpm2_getsapicontext(ESYS_CONTEXT *esys_context,
+    TSS2_SYS_CONTEXT **sys_context) {
+
+    TSS2_RC rval = Esys_GetSysContext(esys_context, sys_context);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Esys_GetSysContext, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
     return tool_rc_success;
+}
+
+tool_rc tpm2_sapi_getcphash(TSS2_SYS_CONTEXT *sys_context,
+    const TPM2B_NAME *name1, const TPM2B_NAME *name2, const TPM2B_NAME *name3,
+    TPMI_ALG_HASH halg, TPM2B_DIGEST *cp_hash) {
+
+    uint8_t command_code[4];
+    TSS2_RC rval = Tss2_Sys_GetCommandCode(sys_context, &command_code[0]);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Tss2_Sys_GetCommandCode, rval);
+        return tool_rc_general_error;
+    }
+
+    const uint8_t *command_parameters;
+    size_t command_parameters_size;
+    rval = Tss2_Sys_GetCpBuffer(sys_context, &command_parameters_size,
+        &command_parameters);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Tss2_Sys_GetCpBuffer, rval);
+        return tool_rc_general_error;
+    }
+
+    uint16_t to_hash_len = sizeof(command_code) + command_parameters_size;
+    to_hash_len += name1 ? name1->size : 0;
+    to_hash_len += name2 ? name2->size : 0;
+    to_hash_len += name3 ? name3->size : 0;
+
+    uint8_t *to_hash = malloc(to_hash_len);
+    if (!to_hash) {
+        LOG_ERR("oom");
+        return tool_rc_general_error;
+    }
+
+    //Command-Code
+    memcpy(to_hash, command_code, sizeof(command_code));
+    uint16_t offset = sizeof(command_code);
+
+    //Names
+    if (name1) {
+        memcpy(to_hash + offset, name1->name, name1->size);
+        offset += name1->size;
+    }
+    if (name2) {
+        memcpy(to_hash + offset, name2->name, name2->size);
+        offset += name2->size;
+    }
+    if (name3) {
+        memcpy(to_hash + offset, name3->name, name3->size);
+        offset += name3->size;
+    }
+
+    //CpBuffer
+    memcpy(to_hash + offset, command_parameters, command_parameters_size);
+
+    //cpHash
+    tool_rc rc = tool_rc_success;
+    bool result = tpm2_openssl_hash_compute_data(halg, to_hash, to_hash_len,
+        cp_hash);
+    free(to_hash);
+    if (!result) {
+        LOG_ERR("Failed cpHash digest calculation.");
+        rc = tool_rc_general_error;
+    }
+
+    return rc;
 }
