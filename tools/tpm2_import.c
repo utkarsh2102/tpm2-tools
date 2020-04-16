@@ -58,6 +58,7 @@ struct tpm_import_ctx {
     char *policy;
     bool import_tpm; /* Any param that is exclusively used by import tpm object sets this flag */
     TPMI_ALG_PUBLIC key_type;
+    char *cp_hash_path;
 };
 
 static tpm_import_ctx ctx = {
@@ -182,8 +183,23 @@ static tool_rc key_import(ESYS_CONTEXT *ectx, TPM2B_PUBLIC *parent_pub,
     TPMT_SYM_DEF_OBJECT *sym_alg =
             &parent_pub->publicArea.parameters.rsaDetail.symmetric;
 
-    return tpm2_import(ectx, &ctx.parent.object, &enc_sensitive_key, pubkey,
-            &private, encrypted_seed, sym_alg, imported_private);
+    if (!ctx.cp_hash_path) {
+        return tpm2_import(ectx, &ctx.parent.object, &enc_sensitive_key, pubkey,
+            &private, encrypted_seed, sym_alg, imported_private, NULL);
+    }
+
+    TPM2B_DIGEST cp_hash = { .size = 0 };
+    tool_rc rc = tpm2_import(ectx, &ctx.parent.object, &enc_sensitive_key, pubkey,
+            &private, encrypted_seed, sym_alg, imported_private, &cp_hash);
+    if (rc != tool_rc_success) {
+        return rc;
+    }
+
+    bool result = files_save_digest(&cp_hash, ctx.cp_hash_path);
+    if (!result) {
+        rc = tool_rc_general_error;
+    }
+    return rc;
 }
 
 static bool on_option(char key, char *value) {
@@ -238,6 +254,9 @@ static bool on_option(char key, char *value) {
     case 0:
         ctx.auth_key_file = value;
         break;
+    case 1:
+        ctx.cp_hash_path = value;
+        break;
     default:
         LOG_ERR("Invalid option");
         return false;
@@ -263,6 +282,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
       { "policy",             required_argument, NULL, 'L'},
       { "encryption-key",     required_argument, NULL, 'k'},
       { "passin",             required_argument, NULL,  0 },
+      { "cphash",             required_argument, NULL,  1 },
     };
 
     *opts = tpm2_options_new("P:p:G:i:C:U:u:r:a:g:s:L:k:", ARRAY_LEN(topts),
@@ -282,13 +302,6 @@ static tool_rc check_options(void) {
 
     /* Check the tpm import specific options */
     if (ctx.import_tpm) {
-
-        if (!ctx.policy) {
-            LOG_ERR("Expected imported key policy to be specified via \"-L\","
-                    " missing option.");
-            rc = tool_rc_option_error;
-        }
-
         if (!ctx.input_seed_file) {
             LOG_ERR("Expected SymSeed to be specified via \"-s\","
                     " missing option.");
@@ -309,6 +322,11 @@ static tool_rc check_options(void) {
             LOG_ERR("Expected key type to be specified via \"-G\","
                     " missing option.");
             rc = tool_rc_option_error;
+        }
+
+        if (ctx.cp_hash_path) {
+            LOG_WARN("CAUTION CpHash calculation includes parameters that"
+                     "have a derived/random seed!");
         }
     }
 
@@ -491,7 +509,7 @@ static tool_rc openssl_import(ESYS_CONTEXT *ectx) {
     TPM2B_PRIVATE *imported_private = NULL;
     tmp_rc = key_import(ectx, parent_pub, &private, &public, &encrypted_seed,
             &imported_private);
-    if (tmp_rc != tool_rc_success) {
+    if (tmp_rc != tool_rc_success || ctx.cp_hash_path) {
         rc = tmp_rc;
         goto keyout;
     }
@@ -598,31 +616,50 @@ static tool_rc tpm_import(ESYS_CONTEXT *ectx) {
         return tool_rc_general_error;
     }
 
-public.publicArea.authPolicy.size = sizeof(public.publicArea.authPolicy.buffer);
-    result = files_load_bytes_from_path(ctx.policy,
+    if (ctx.policy) {
+        public.publicArea.authPolicy.size =
+            sizeof(public.publicArea.authPolicy.buffer);
+        result = files_load_bytes_from_path(ctx.policy,
         public.publicArea.authPolicy.buffer,
-            &public.publicArea.authPolicy.size);
-    if (!result) {
-        return tool_rc_general_error;
+        &public.publicArea.authPolicy.size);
+        if (!result) {
+            LOG_ERR("Failed to copy over the auth policy to the public data");
+            return tool_rc_general_error;
+        }
     }
 
+    if (!ctx.cp_hash_path) {
+        rc = tpm2_import(ectx, &ctx.parent.object, &enc_key, &public, &duplicate,
+            &encrypted_seed, &sym_alg, &imported_private, NULL);
+        if (rc != tool_rc_success) {
+            return rc;
+        }
+
+        assert(imported_private);
+
+        result = files_save_private(imported_private, ctx.private_key_file);
+        free(imported_private);
+        if (!result) {
+            LOG_ERR("Failed to save private key into file \"%s\"",
+                    ctx.private_key_file);
+            return tool_rc_general_error;
+        }
+        return tool_rc_success;
+    }
+
+    TPM2B_DIGEST cp_hash = { .size = 0 };
     rc = tpm2_import(ectx, &ctx.parent.object, &enc_key, &public, &duplicate,
-            &encrypted_seed, &sym_alg, &imported_private);
+            &encrypted_seed, &sym_alg, &imported_private, &cp_hash);
     if (rc != tool_rc_success) {
         return rc;
     }
 
-    assert(imported_private);
-
-    result = files_save_private(imported_private, ctx.private_key_file);
-    free(imported_private);
+    result = files_save_digest(&cp_hash, ctx.cp_hash_path);
     if (!result) {
-        LOG_ERR("Failed to save private key into file \"%s\"",
-                ctx.private_key_file);
-        return tool_rc_general_error;
+        rc = tool_rc_general_error;
     }
+    return rc;
 
-    return tool_rc_success;
 }
 
 tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {

@@ -163,7 +163,7 @@ tool_rc tpm2_policy_build_policyauthorize(ESYS_CONTEXT *ectx,
     bool result = true;
     TPM2B_DIGEST approved_policy = { .size = 0 };
     if (policy_digest_path) {
-        approved_policy.size = UINT16_MAX;
+        approved_policy.size = sizeof(TPMU_HA);
         result = files_load_bytes_from_path(policy_digest_path,
             approved_policy.buffer, &approved_policy.size);
     }
@@ -256,6 +256,14 @@ tool_rc tpm2_policy_build_policytemplate(ESYS_CONTEXT *ectx,
     return tpm2_policy_template(ectx, policy_session_handle, template_hash);
 }
 
+tool_rc tpm2_policy_build_policycphash(ESYS_CONTEXT *ectx,
+    tpm2_session *session, const TPM2B_DIGEST *cphash) {
+
+    ESYS_TR policy_session_handle = tpm2_session_get_handle(session);
+
+    return tpm2_policy_cphash(ectx, policy_session_handle, cphash);
+}
+
 tool_rc tpm2_policy_build_policyauthvalue(ESYS_CONTEXT *ectx,
         tpm2_session *session) {
 
@@ -269,7 +277,7 @@ tool_rc tpm2_policy_build_policysecret(ESYS_CONTEXT *ectx,
         tpm2_session *policy_session, tpm2_loaded_object *auth_entity_obj,
         INT32 expiration, TPMT_TK_AUTH **policy_ticket,
         TPM2B_TIMEOUT **timeout, bool is_nonce_tpm,
-        const char *policy_qualifier_data) {
+        const char *policy_qualifier_data, TPM2B_DIGEST *cp_hash) {
 
     /*
      * Qualifier data is optional. If not specified default to 0
@@ -297,7 +305,8 @@ tool_rc tpm2_policy_build_policysecret(ESYS_CONTEXT *ectx,
     }
 
     rc = tpm2_policy_secret(ectx, auth_entity_obj, policy_session_handle,
-        expiration, policy_ticket, timeout, nonce_tpm, &policy_qualifier);
+        expiration, policy_ticket, timeout, nonce_tpm, &policy_qualifier,
+        cp_hash);
 
 tpm2_policy_build_policysecret_out:
     Esys_Free(nonce_tpm);
@@ -588,6 +597,7 @@ bool tpm2_policy_parse_policy_list(char *str, TPML_DIGEST *policy_list) {
                 hash = tpm2_alg_util_from_optarg(subtoken,
                         tpm2_alg_util_flags_hash);
                 if (hash == TPM2_ALG_ERROR) {
+                    LOG_ERR("Invalid/ Unspecified policy digest algorithm.");
                     return false;
                 }
             }
