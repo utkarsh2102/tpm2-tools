@@ -15,6 +15,7 @@ Build-Depends: autoconf,
                pandoc,
                pkg-config,
                python3-yaml,
+               uuid-dev,
                xsltproc
 Homepage: https://github.com/01org/tpm2.0-tools
 Standards-Version: 4.4.1
