@@ -1,8 +1,8 @@
 Source: tpm2-tools
 Section: utils
 Priority: optional
-Maintainer: Mathieu Trudel-Lapierre <mathieu.trudel-lapierre@canonical.com>
-Uploaders: Ying-Chun Liu (PaulLiu) <paulliu@debian.org>,
+Maintainer: Ying-Chun Liu (PaulLiu) <paulliu@debian.org>
+Uploaders: Mathieu Trudel-Lapierre <cyphermox@ubuntu.com>,
            Ivan Hu <ivan.hu@ubuntu.com>
 Build-Depends: autoconf,
                autoconf-archive,

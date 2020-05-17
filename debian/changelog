@@ -1,3 +1,9 @@
+tpm2-tools (4.2-3) unstable; urgency=low
+
+  * Change myself as maintainer. (Closes: #956933)
+
+ -- Ying-Chun Liu (PaulLiu) <paulliu@debian.org>  Sun, 17 May 2020 11:37:22 +0800
+
 tpm2-tools (4.2-2) unstable; urgency=low
 
   * Build-Depends add uuid-dev. Fix FTBFS.
