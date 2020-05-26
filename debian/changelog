@@ -1,3 +1,9 @@
+tpm2-tools (4.2.1-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Ying-Chun Liu (PaulLiu) <paulliu@debian.org>  Tue, 26 May 2020 21:34:42 +0800
+
 tpm2-tools (4.2-3) unstable; urgency=low
 
   * Change myself as maintainer. (Closes: #956933)
