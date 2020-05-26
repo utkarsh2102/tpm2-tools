@@ -1,5 +1,13 @@
 ## Changelog
 
+### 4.2.1 - 2020-05-25
+
+* Fix missing handle maps for ESY3 handle breaks. See #1994.
+
+* Bump ESYS minimum dependency version from 2.3.0 to 2.4.0.
+
+* Fix for loop declarations build error.
+
 ### 4.2 2020-04-08
 
  * Fix various issues reported by static analysis tools.
