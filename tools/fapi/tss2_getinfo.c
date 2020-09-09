@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "tools/fapi/tss2_template.h"
 
 /* needed by tpm2_util and tpm2_option functions */
@@ -34,12 +35,18 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         /* output file */
         {"info"  , required_argument, NULL, 'o'}
     };
-    return (*opts = tpm2_options_new ("f:o:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("fo:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
 /* Execute specific tool */
 int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+    /* Check availability of required parameters */
+    if (!ctx.info) {
+        fprintf (stderr, "info parameter is missing, pass --info\n");
+        return -1;
+    }
+
     /* Execute FAPI command with passed arguments */
     char *info;
     TSS2_RC r = Fapi_GetInfo (fctx, &info);
@@ -49,7 +56,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     }
 
     /* Write returned data to file(s) */
-    r = open_write_and_close (ctx.info, ctx.overwrite, info, 0);
+    r = open_write_and_close (ctx.info, ctx.overwrite, info, strlen(info));
     if (r) {
         LOG_PERR ("open_write_and_close", r);
         Fapi_Free (info);

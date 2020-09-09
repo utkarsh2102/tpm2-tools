@@ -12,29 +12,31 @@
 
 # DESCRIPTION
 
-**tss2_nvextend**(1) - This command performs an extend options on an NV index of type extend (i.e. an NV index that behaves similar to a PCR).
+**tss2_nvextend**(1) - This command performs an extend operation on an NV index
+(i.e. an NV index that behaves similar to a PCR).
 
 # OPTIONS
 
 These are the available options:
 
-  * **-i**, **\--data**:
+  * **-i**, **\--data** _FILENAME_ or _-_ (for stdin):
 
-    The data to be extended into the NV space. MUST NOT be NULL.
+    The data to be extended into the NV space.
 
-  * **-p**, **\--nvPath**:
+  * **-p**, **\--nvPath** _STRING_:
 
-    Identifies the NV space to write. MUST NOT be NULL.
+    Identifies the NV space to write.
 
-  * **-l**, **\--logData**:
+  * **-l**, **\--logData** _FILENAME_ or _-_ (for stdin):
 
-    A JSON representation of data to be written to the PCR’s event log. MAY be NULL.
+    A JSON representation of data to be written to the PCR's event log. Optional parameter.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
-tss2_nvextend --nvPath /nv/Owner/NvExtend --data nv_write_data.file --logData log.data
+```
+tss2_nvextend --nvPath /nv/Owner/NvExtend --data data.file --logData logData.file
+```
 
 # RETURNS
 

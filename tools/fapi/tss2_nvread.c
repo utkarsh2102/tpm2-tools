@@ -45,7 +45,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"data", required_argument, NULL, 'o'},
         {"logData", required_argument, NULL, 'l'}
     };
-    return (*opts = tpm2_options_new ("f:o:p:l:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("fo:p:l:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -61,6 +61,16 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         return -1;
     }
 
+    /* Check exclusive access to stdout */
+    int count_out = 0;
+    if (ctx.data && !strcmp (ctx.data, "-")) count_out +=1;
+    if (ctx.logData && !strcmp (ctx.logData, "-")) count_out +=1;
+    if (count_out > 1) {
+        fprintf (stderr, "Only one of --data and --logData can print to - "\
+        "(standard output)\n");
+        return -1;
+    }
+
     /* Execute FAPI command with passed arguments */
     uint8_t *data;
     size_t data_len;
@@ -70,23 +80,28 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         LOG_PERR ("Fapi_NvRead", r);
         return 1;
     }
-    else {
-        /* Write returned data to file(s) */
-        r = open_write_and_close (ctx.data, ctx.overwrite, data, data_len);
-        if (r){
-            LOG_PERR ("open_write_and_close data", r);
+
+    /* Write returned data to file(s) */
+    r = open_write_and_close (ctx.data, ctx.overwrite, data, data_len);
+    if (r) {
+        LOG_PERR ("open_write_and_close data", r);
+        Fapi_Free (data);
+        return 1;
+    }
+
+    if (ctx.logData && logData) {
+        r = open_write_and_close (ctx.logData, ctx.overwrite, logData,
+            strlen(logData));
+        if (r) {
+            Fapi_Free (data);
+            Fapi_Free (logData);
+            LOG_PERR ("open_write_and_close logData", r);
             return 1;
         }
-        if (logData){
-            r = open_write_and_close (ctx.logData, ctx.overwrite, logData, strlen(logData));
-            if (r){
-                Fapi_Free (data);
-                LOG_PERR ("open_write_and_close logData", r);
-                return 1;
-            }
-            Fapi_Free (logData);
-        }
-        Fapi_Free (data);
     }
+
+    Fapi_Free (logData);
+    Fapi_Free (data);
+
     return 0;
 }

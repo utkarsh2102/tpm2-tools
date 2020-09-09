@@ -18,19 +18,20 @@
 
 These are the availabe options:
 
-  * **-i**, **\--bitmap**:
+  * **-i**, **\--bitmap** _BITS_:
 
     A mask indicating which bits to set in the NV space.
 
-  * **-p**, **\--nvPath**:
+  * **-p**, **\--nvPath** _STRING_:
 
-    Identifies the NV space to write. MUST NOT be NULL.
+    Identifies the NV space to write.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
+```
 tss2_nvsetbits --nvPath /nv/Owner/NvBitmap --bitmap 0x0102030405060608
+```
 
 # RETURNS
 

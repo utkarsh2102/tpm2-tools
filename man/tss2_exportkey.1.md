@@ -12,33 +12,36 @@
 
 # DESCRIPTION
 
-**tss2_exportkey**(1) - This command will duplicate a key and encrypt it using the public key of a new parent. The exported data will contain the re-wrapped key pointed to by the pathOfKeyToDuplicate and then the JSON encoded policy. The exported data SHALL be encoded as described in the FAPI specification.
+**tss2_exportkey**(1) - This command will duplicate a key and encrypt it using the public key of a new parent. The
+exported data will contain the re-wrapped key pointed to by the pathOfKeyToDuplicate and then the JSON encoded policy.
 
 # OPTIONS
 
 These are the available options:
 
-  * **-e** **\--pathToPublicKeyOfNewParent**:
+  * **-e** **\--pathToPublicKeyOfNewParent** _STRING_:
 
-    The path to the public key of the new parent. This key MAY be in the public key hierarchy /ext. If NULL only the public key will exported.
+    The path to the public key of the new parent. This key MAY be in the public key hierarchy /ext.
+    Optional parameter. If omitted only the public key will exported.
 
   * **-f**, **\--force**:
 
     Force overwriting the output file.
 
-  * **-o**, **\--exportedData**:
+  * **-o**, **\--exportedData** _FILENAME_ or _-_ (for stdout):
 
-    Returns the exported subtree. MUST NOT be NULL.
+    Returns the exported subtree.
 
-  * **-p**, **\--pathOfKeyToDuplicate**:
+  * **-p**, **\--pathOfKeyToDuplicate** _STRING_:
 
-    The path to the root of the subtree to export. MUST NOT be NULL.
+    The path to the root of the subtree to export.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
-tss2_exportkey --pathOfKeyToDuplicate HS/SRK/myRSADecrypt --exportedData exportedPublicKey
+```
+tss2_exportkey --pathOfKeyToDuplicate HS/SRK/myRSADecrypt --exportedData exportedData.file
+```
 
 # RETURNS
 

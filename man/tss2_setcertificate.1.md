@@ -18,19 +18,22 @@
 
 These are the available options:
 
-  * **-p**, **\--path**:
+  * **-p**, **\--path** _STRING_:
 
-    Identifies the entity to be associated with the certificate. MUST NOT be NULL.
+    Identifies the entity to be associated with the certificate.
 
-  * **-i**, **\--x509certData**:
+  * **-i**, **\--x509certData** _FILENAME_ or _-_ (for stdin):
 
-    The PEM encoded certificate. MAY be NULL. If x509certData is NULL then the stored x509 certificate SHALL be removed.
+    The PEM encoded certificate. Optional parameter. If omitted, then the stored
+    x509 certificate is removed.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
 
-tss2_setcertificate --path HS/SRK/myRSACrypt --x509certData certificate.file
+```
+tss2_setcertificate --path HS/SRK/myRSACrypt --x509certData x509certData.file
+```
 
 # RETURNS
 

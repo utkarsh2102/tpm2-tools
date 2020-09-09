@@ -61,7 +61,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"certificate", required_argument, NULL, 'c'},
 
     };
-    return (*opts = tpm2_options_new ("c:d:f:p:k:o:s:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("c:d:fp:k:o:s:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -81,28 +81,16 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         fprintf (stderr, "signature missing, use --signature\n");
         return -1;
     }
-    if (ctx.publicKey && ctx.certificate){
-        if (!strcmp ("-", ctx.signature) + !strcmp ("-", ctx.publicKey) +
-            !strcmp("-", ctx.certificate ? ctx.certificate : "") > 1) {
-            fprintf (stderr, "At most one of --certificate, --publicKey and "\
-                "--signature can be '-' (standard output)\n");
-            return -1;
-        }
-    }
-    if (ctx.publicKey && !ctx.certificate){
-        if (!strcmp ("-", ctx.signature) + !strcmp ("-", ctx.publicKey) > 1) {
-            fprintf (stderr, "At most one of --publicKey and --signature can "\
-                "be '-' (standard output)\n");
-            return -1;
-        }
-    }
-    if (ctx.certificate && !ctx.publicKey){
-        if (!strcmp ("-", ctx.signature) + !strcmp("-",
-            ctx.certificate ? ctx.certificate : "") > 1) {
-            fprintf (stderr, "At most one of --certificate and --signature can"\
-            " be '-' (standard output)\n");
-            return -1;
-        }
+
+    /* Check exclusive access to stdout */
+    int count_out = 0;
+    if (ctx.certificate && !strcmp (ctx.certificate, "-")) count_out +=1;
+    if (ctx.signature && !strcmp (ctx.signature, "-")) count_out +=1;
+    if (ctx.publicKey && !strcmp (ctx.publicKey, "-")) count_out +=1;
+    if (count_out > 1) {
+        fprintf (stderr, "Only one of --certificate, --signature and "\
+        "--publicKey can print to - (standard output)\n");
+        return -1;
     }
 
     /* Read data needed to create signature */
@@ -117,8 +105,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
 
     /* Execute FAPI command with passed arguments */
     r = Fapi_Sign (fctx, ctx.keyPath, ctx.padding, digest,
-        digestSize, &signature, &signatureSize, &publicKey, ctx.certificate ?
-        &certificate : NULL);
+        digestSize, &signature, &signatureSize, &publicKey, &certificate);
     if (r != TSS2_RC_SUCCESS) {
         LOG_PERR ("Fapi_Sign", r);
         free (digest);
@@ -127,38 +114,40 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     free (digest);
 
     /* Write returned data to file(s) */
-    if (ctx.certificate) {
-        if (certificate && strlen(certificate)){
+    if (ctx.certificate && certificate && strlen(certificate)) {
             r = open_write_and_close (ctx.certificate, ctx.overwrite,
                 certificate, strlen(certificate));
             if (r) {
                 LOG_PERR ("open_write_and_close certificate", r);
-                free (certificate);
+                Fapi_Free (certificate);
                 Fapi_Free (signature);
                 Fapi_Free (publicKey);
                 return 1;
             }
+    }
+    Fapi_Free (certificate);
+
+    if (ctx.signature && signature) {
+        r = open_write_and_close (ctx.signature, ctx.overwrite, signature,
+            signatureSize);
+        if (r) {
+            LOG_PERR ("open_write_and_close certificate signature", r);
+            Fapi_Free (signature);
+            Fapi_Free (publicKey);
+            return 1;
         }
     }
-    r = open_write_and_close (ctx.signature, ctx.overwrite, signature,
-        signatureSize);
-    if (r) {
-        LOG_PERR ("open_write_and_close certificate signature", r);
-        Fapi_Free (signature);
-        Fapi_Free (publicKey);
-        return 1;
-    }
-
-    r = open_write_and_close (ctx.publicKey, ctx.overwrite, publicKey,
-            strlen(publicKey));
-    if (r) {
-        LOG_PERR ("open_write_and_close certificate publicKey", r);
-        Fapi_Free (signature);
-        Fapi_Free (publicKey);
-        return 1;
-    }
-
     Fapi_Free (signature);
+
+    if (ctx.publicKey && publicKey) {
+        r = open_write_and_close (ctx.publicKey, ctx.overwrite, publicKey,
+                strlen(publicKey));
+        if (r) {
+            LOG_PERR ("open_write_and_close certificate publicKey", r);
+            Fapi_Free (publicKey);
+            return 1;
+        }
+    }
     Fapi_Free (publicKey);
 
     return 0;

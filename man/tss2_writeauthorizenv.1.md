@@ -12,25 +12,27 @@
 
 # DESCRIPTION
 
-**tss2_writeauthorizenv**(1) - This command writes the digest value of a policy to an NV index such that this policy can be used in other policies containing a corresponding PolicyAuthorizeNv element. Note that the nameAlg property of the NV index defines the digest algorithm for the policy.
+**tss2_writeauthorizenv**(1) - This command writes the digest value of a policy to an NV index such that this policy can be used in other policies containing a corresponding PolicyAuthorizeNv element.
 
 # OPTIONS
 
 These are the available options:
 
-  * **-p**, **\--nvPath**:
+  * **-p**, **\--nvPath** _STRING_:
 
-    The path of the NV index. MUST NOT be NULL.
+    The path of the NV index.
 
-  * **-P**, **\--policyPath**:
+  * **-P**, **\--policyPath** _STRING_:
 
-    The path of the new policy. MUST NOT be NULL.
+    The path of the new policy.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
 
-tss2_writeauthorizenv --nvPath /nv/Owner/myNV --policyPath pcr-policy
+```
+tss2_writeauthorizenv --nvPath /nv/Owner/myNV --policyPath /policy/pcr-policy
+```
 
 # RETURNS
 

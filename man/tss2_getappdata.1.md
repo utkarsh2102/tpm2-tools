@@ -12,26 +12,25 @@
 
 # DESCRIPTION
 
-**tss2_getappdata**(1) - This command returns the previously stored application data for an object. If no application data is present, then appDataSize SHALL be 0.
+**tss2_getappdata**(1) - This command returns the previously stored application data for an object.
 
 # OPTIONS
 
 These are the available options:
 
-  * **-p**, **\--path**:
+  * **-p**, **\--path** _STRING_:
 
-    Path of the object for which the appData will be loaded. MUST NOT be NULL.
+    Path of the object for which the appData will be loaded.
 
-  * **-o**, **\--appData**:
+  * **-o**, **\--appData** _FILENAME_ or _-_ (for stdout):
 
-    Returns a copy of the stored data. MAY be NULL.
+    Returns a copy of the stored data. Optional parameter.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
 ```
-tss2_getappdata --path HS/SRK/myRSACrypt --appData appData
+tss2_getappdata --path HS/SRK/myRSACrypt --appData appData.file
 ```
 
 # RETURNS
