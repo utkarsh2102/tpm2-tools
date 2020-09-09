@@ -41,7 +41,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"force" , no_argument, NULL, 'f'},
 
     };
-    return (*opts = tpm2_options_new ("o:f:p:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("o:fp:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -65,10 +65,13 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     }
 
     /* Write returned data to file(s) */
-    r = open_write_and_close (ctx.data, ctx.overwrite, appData, appDataSize);
-    if (r != TSS2_RC_SUCCESS) {
-        LOG_PERR ("open_write_and_close appData", r);
-        return 1;
+    if (appData && ctx.data) {
+        r = open_write_and_close (ctx.data, ctx.overwrite, appData,
+            appDataSize);
+        if (r != TSS2_RC_SUCCESS) {
+            LOG_PERR ("open_write_and_close appData", r);
+            return 1;
+        }
     }
 
    /* Free allocated variables */

@@ -48,7 +48,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"force"         , no_argument      , NULL, 'f'},
         {"pcrLog"       , required_argument, NULL, 'l'}
     };
-    return (*opts = tpm2_options_new ("o:x:f:l:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("o:x:fl:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -59,17 +59,14 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         fprintf (stderr, "No PCR index provided, use --pcrIndex\n");
         return -1;
     }
-    if (!ctx.pcrValue) {
-        fprintf (stderr, "No PCR value provided, use --pcrValue\n");
-        return -1;
-    }
-    if (!ctx.pcrLog) {
-        fprintf (stderr, "No PCR log provided, use --pcrLog\n");
-        return -1;
-    }
-    if (!strcmp (ctx.pcrLog, "-") && !strcmp (ctx.pcrValue, "-")) {
-        fprintf (stderr, "Only one of --pcrLog and --pcrIndex can print to "\
-            "standard output");
+
+    /* Check exclusive access to stdout */
+    int count_out = 0;
+    if (ctx.pcrValue && !strcmp (ctx.pcrValue, "-")) count_out +=1;
+    if (ctx.pcrLog && !strcmp (ctx.pcrLog, "-")) count_out +=1;
+    if (count_out > 1) {
+        fprintf (stderr, "Only one of --pcrValue and --pcrLog can print to - "\
+        "(standard output)\n");
         return -1;
     }
 
@@ -85,30 +82,30 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     }
 
     /* Write returned data to file(s) */
-    r = open_write_and_close (ctx.pcrValue, ctx.overwrite, pcrValue,
-        pcrValueSize);
-    if (r){
-        LOG_PERR ("open_write_and_close pcrValue", r);
-        return 1;
-    }
-    if (pcrLog){
-        r =  open_write_and_close (ctx.pcrLog, ctx.overwrite, pcrLog, 0);
-    }
-    else {
-        r =  open_write_and_close (ctx.pcrLog, ctx.overwrite, "", 0);
-    }
-    if (r){
-        LOG_PERR ("open_write_and_close pcrLog", r);
-        Fapi_Free (pcrValue);
-        if (pcrLog){
+    if (ctx.pcrValue) {
+        r = open_write_and_close (ctx.pcrValue, ctx.overwrite, pcrValue,
+            pcrValueSize);
+        if (r) {
             Fapi_Free (pcrLog);
+            Fapi_Free (pcrValue);
+            LOG_PERR ("open_write_and_close pcrValue", r);
+            return 1;
         }
-        return 1;
+    }
+
+    if (ctx.pcrLog) {
+        r =  open_write_and_close (ctx.pcrLog, ctx.overwrite, pcrLog,
+            strlen(pcrLog));
+        if (r) {
+            Fapi_Free (pcrLog);
+            Fapi_Free (pcrValue);
+            LOG_PERR ("open_write_and_close pcrLog", r);
+            return 1;
+        }
     }
 
     Fapi_Free (pcrValue);
-    if (pcrLog){
-        Fapi_Free (pcrLog);
-    }
+    Fapi_Free (pcrLog);
+
     return r;
 }

@@ -18,44 +18,54 @@
 
 These are the available options:
 
-  * **-x**, **\--pcrList**:
+  * **-x**, **\--pcrList** _STRING_:
 
-    An array holding the PCR indices to quote against. MUST NOT be NULL.
+    An array holding the PCR indices to quote against.
 
-  * **-Q**, **\--qualifyingData**:
+  * **-Q**, **\--qualifyingData** _FILENAME_ or _-_ (for stdin):
 
-    A nonce provided by the caller to ensure freshness of the signature. MAY be
-    NULL.
+    A nonce provided by the caller to ensure freshness of the signature. Optional parameter.
 
-  * **-l**, **\--pcrLog**:
+  * **-l**, **\--pcrLog** _FILENAME_ or _-_ (for stdout):
 
-    Returns the PCR log for the chosen PCR in the format defined in the FAPI specification. MAY be NULL.
+    Returns the PCR log for the chosen PCR. Optional parameter.
+
+    PCR event logs are a list (arbitrary length JSON array) of log entries with
+    the following content.
+
+        - recnum: Unique record number
+        - pcr: PCR index
+        - digest: The digests
+        - type: The type of event. At the moment the only possible value is: "LINUX_IMA" (legacy IMA)
+        - eventDigest: Digest of the event; e.g. the digest of the measured file
+        - eventName: Name of the event; e.g. the name of the measured file.
 
   * **-f**, **\--force**:
 
     Force overwriting the output file.
 
-  * **-p**, **\--keyPath**:
+  * **-p**, **\--keyPath** _STRING_:
 
-    Identifies the signing key. MUST NOT be NULL.
+    Identifies the signing key.
 
-  * **-q**, **\--quoteInfo**:
+  * **-q**, **\--quoteInfo** _FILENAME_ or _-_ (for stdout):
 
-    Returns a JSON-encoded structure holding the inputs to the quote operation. This includes the digest value and PCR values. MUST NOT be NULL.
+    Returns a JSON-encoded structure holding the inputs to the quote operation. This includes the digest value and PCR values.
 
-  * **-o**, **\--signature**:
+  * **-o**, **\--signature** _FILENAME_ or _-_ (for stdout):
 
-    Returns the signature over the quoted material. MUST NOT be NULL.
+    Returns the signature over the quoted material.
 
-  * **-c**, **\--certificate**:
+  * **-c**, **\--certificate** _FILENAME_ or _-_ (for stdout):
 
-    The certificate associated with keyPath in PEM format. MAY be NULL.
+    The certificate associated with keyPath in PEM format. Optional parameter.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
-tss2_quote --keyPath HS/SRK/quotekey --pcrList "16" --qualifyingData nonce.file --signature signature.file --pcrLog pcr.log --certificate certificate.file --quoteInfo quote.info
+```
+tss2_quote --keyPath HS/SRK/quotekey --pcrList "10,16" --qualifyingData qualifyingData.file --signature signature.file --pcrLog pcrLog.file --certificate certificate.file --quoteInfo quoteInfo.info
+```
 
 # RETURNS
 

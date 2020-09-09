@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "tools/fapi/tss2_template.h"
 
 /* needed by tpm2_util and tpm2_option functions */
@@ -54,6 +55,16 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         return -1;
     }
 
+    /* Check exclusive access to stdin */
+    int count_in = 0;
+    if (ctx.data && !strcmp (ctx.data, "-")) count_in +=1;
+    if (ctx.logData && !strcmp (ctx.logData, "-")) count_in +=1;
+    if (count_in > 1) {
+        fprintf (stderr, "Only one of --data and --logData can read from - "\
+        "(standard input)\n");
+        return -1;
+    }
+
     /* Read data to extend from file */
     uint8_t *data;
     size_t data_len;
@@ -68,11 +79,10 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         TSS2_RC r = open_read_and_close (ctx.logData, (void**)&logData, 0);
         if (r){
             LOG_PERR ("open_read_and_close logData", r);
-            Fapi_Free (data);
+            free (data);
             return 1;
         }
     }
-
 
     /* Execute FAPI command with passed arguments */
     r = Fapi_NvExtend(fctx, ctx.nvPath, data, data_len, logData);
@@ -80,10 +90,8 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         LOG_PERR("Fapi_NvExtend", r);
         return 1;
     }
-    Fapi_Free (data);
-    if (logData){
-        Fapi_Free (logData);
-    }
+    free (data);
+    free (logData);
 
     return 0;
 }

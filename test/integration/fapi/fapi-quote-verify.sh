@@ -38,7 +38,7 @@ tss2_import --path "ext/myNewParent" --importData $PUBLIC_QUOTE_KEY
 
 tss2_verifyquote --publicKeyPath "ext/myNewParent" \
     --qualifyingData $NONCE_FILE --quoteInfo $QUOTE_INFO \
-    --signature $SIGNATURE_FILE --pcrLog=$PCR_LOG
+    --signature $SIGNATURE_FILE --pcrLog $PCR_LOG
 
 expect <<EOF
 # Try with missing keyPath
@@ -67,49 +67,10 @@ if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
 EOF
 
 expect <<EOF
-# Try with missing qualifyingData
-spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
-    --signature $SIGNATURE_FILE \
-    --pcrLog $PCR_LOG --certificate $CERTIFICATE_FILE \
-    --quoteInfo $QUOTE_INFO --force
-set ret [wait]
-if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
-    Command has not failed as expected\n"
-    exit 1
-}
-EOF
-
-expect <<EOF
 # Try with missing signature
 spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
     --qualifyingData $NONCE_FILE \
     --pcrLog $PCR_LOG --certificate $CERTIFICATE_FILE \
-    --quoteInfo $QUOTE_INFO --force
-set ret [wait]
-if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
-    Command has not failed as expected\n"
-    exit 1
-}
-EOF
-
-expect <<EOF
-# Try with missing pcrLog
-spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
-    --qualifyingData $NONCE_FILE --signature $SIGNATURE_FILE \
-    --certificate $CERTIFICATE_FILE \
-    --quoteInfo $QUOTE_INFO --force
-set ret [wait]
-if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
-    Command has not failed as expected\n"
-    exit 1
-}
-EOF
-
-expect <<EOF
-# Try with missing certificate
-spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
-    --qualifyingData $NONCE_FILE --signature $SIGNATURE_FILE \
-    --pcrLog $PCR_LOG \
     --quoteInfo $QUOTE_INFO --force
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
@@ -132,11 +93,50 @@ if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
 EOF
 
 expect <<EOF
-# Try with multiple stdins
+# Try with multiple stdout (1)
+spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
+    --qualifyingData $NONCE_FILE --signature - \
+    --pcrLog - --certificate $CERTIFICATE_FILE \
+    --quoteInfo $QUOTE_INFO --force
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdout (2)
 spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
     --qualifyingData $NONCE_FILE --signature $SIGNATURE_FILE \
-    --pcrLog $PCR_LOG --certificate=- \
-    --quoteInfo=- --force
+    --pcrLog - --certificate - \
+    --quoteInfo $QUOTE_INFO --force
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdout (3)
+spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
+    --qualifyingData $NONCE_FILE --signature $SIGNATURE_FILE \
+    --pcrLog $PCR_LOG --certificate - \
+    --quoteInfo - --force
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdout (4)
+spawn tss2_quote --keyPath $KEY_PATH --pcrList "16" \
+    --qualifyingData - --signature $SIGNATURE_FILE \
+    --pcrLog - --certificate $CERTIFICATE_FILE \
+    --quoteInfo - --force
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"
@@ -193,18 +193,6 @@ if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
 EOF
 
 expect <<EOF
-# Try with missing qualifyingData
-spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
-    --quoteInfo $QUOTE_INFO \
-    --signature $SIGNATURE_FILE
-set ret [wait]
-if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
-    Command has not failed as expected\n"
-    exit 1
-}
-EOF
-
-expect <<EOF
 # Try with missing quoteInfo
 spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
     --qualifyingData $NONCE_FILE \
@@ -228,10 +216,70 @@ if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
 EOF
 
 expect <<EOF
-# Try with multiple stdins
+# Try with multiple stdins (1)
 spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
-    --qualifyingData $NONCE_FILE --quoteInfo=- \
-    --signature=- --pcrLog=$PCR_LOG
+    --qualifyingData - --quoteInfo - \
+    --signature $SIGNATURE_FILE --pcrLog $PCR_LOG
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdins (2)
+spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
+    --qualifyingData $NONCE_FILE --quoteInfo - \
+    --signature - --pcrLog $PCR_LOG
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdins (3)
+spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
+    --qualifyingData $NONCE_FILE --quoteInfo $QUOTE_INFO \
+    --signature - --pcrLog -
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdins (4)
+spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
+    --qualifyingData - --quoteInfo $QUOTE_INFO \
+    --signature $SIGNATURE_FILE --pcrLog -
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdins (5)
+spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
+    --qualifyingData $NONCE_FILE --quoteInfo - \
+    --signature - --pcrLog $PCR_LOG
+set ret [wait]
+if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
+    Command has not failed as expected\n"
+    exit 1
+}
+EOF
+
+expect <<EOF
+# Try with multiple stdins (6)
+spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
+    --qualifyingData - --quoteInfo - \
+    --signature - --pcrLog -
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"
@@ -243,7 +291,7 @@ expect <<EOF
 # Try with wrong qualifyingData file
 spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
     --qualifyingData abc --quoteInfo $QUOTE_INFO \
-    --signature $SIGNATURE_FILE --pcrLog=$PCR_LOG
+    --signature $SIGNATURE_FILE --pcrLog $PCR_LOG
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"
@@ -255,7 +303,7 @@ expect <<EOF
 # Try with wrong signature file
 spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
     --qualifyingData $NONCE_FILE --quoteInfo $QUOTE_INFO \
-    --signature abc --pcrLog=$PCR_LOG
+    --signature abc --pcrLog $PCR_LOG
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"
@@ -267,7 +315,7 @@ expect <<EOF
 # Try with wrong quoteInfo file
 spawn tss2_verifyquote --publicKeyPath "ext/myNewParent" \
     --qualifyingData $NONCE_FILE --quoteInfo abc \
-    --signature $SIGNATURE_FILE --pcrLog=$PCR_LOG
+    --signature $SIGNATURE_FILE --pcrLog $PCR_LOG
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"
@@ -279,7 +327,7 @@ expect <<EOF
 # Try failing tss2_verifyquote
 spawn tss2_verifyquote --publicKeyPath "ext/abc" \
     --qualifyingData $NONCE_FILE --quoteInfo abc \
-    --signature $SIGNATURE_FILE --pcrLog=$PCR_LOG
+    --signature $SIGNATURE_FILE --pcrLog $PCR_LOG
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"

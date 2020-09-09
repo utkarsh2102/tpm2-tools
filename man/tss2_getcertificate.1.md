@@ -22,19 +22,20 @@ These are the available options:
 
     Force overwriting the output file.
 
-  * **-p**, **\--path**:
+  * **-p**, **\--path** _STRING_:
 
-    The entity whose certificate is requested. MUST NOT be NULL.
+    The entity whose certificate is requested.
 
-  * **-o**, **\--x509certData**:
+  * **-o**, **\--x509certData** _FILENAME_ or _-_ (for stdout):
 
-    Returns the PEM encoded certificate. MUST NOT be NULL. If no certificate is stored, then an empty string is returned.
+    Returns the PEM encoded certificate. If no certificate is stored, then an empty string is returned.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
-tss2_getcertificate --path HS/SRK/myRSACrypt --x509certData myRSACrypt.cert
+```
+tss2_getcertificate --path HS/SRK/myRSACrypt --x509certData x509certData.file
+```
 
 # RETURNS
 

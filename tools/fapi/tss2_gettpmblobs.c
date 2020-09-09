@@ -49,7 +49,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"tpm2bPrivate"    , required_argument, NULL, 'r'},
         {"policy"    , required_argument, NULL, 'l'},
     };
-    return (*opts = tpm2_options_new ("f:p:u:r:l", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("fp:u:r:l", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -60,16 +60,15 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         fprintf (stderr, "path missing, use --path\n");
         return -1;
     }
-    if (!ctx.tpm2bPublic) {
-        fprintf (stderr, "public missing, use --tpm2bPublic\n");
-        return -1;
-    }
-    if (!ctx.tpm2bPrivate) {
-        fprintf (stderr, "private missing, use --tpm2bPrivate\n");
-        return -1;
-    }
-    if (!ctx.policy) {
-        fprintf (stderr, "policy missing, use --policy\n");
+
+    /* Check exclusive access to stdout */
+    int count_out = 0;
+    if (ctx.tpm2bPublic && !strcmp (ctx.tpm2bPublic, "-")) count_out +=1;
+    if (ctx.tpm2bPrivate && !strcmp (ctx.tpm2bPrivate, "-")) count_out +=1;
+    if (ctx.policy && !strcmp (ctx.policy, "-")) count_out +=1;
+    if (count_out > 1) {
+        fprintf (stderr, "Only one of --tpm2bPublic, --tpm2bPrivate and "\
+        "--policy can print to - (standard output)\n");
         return -1;
     }
 
@@ -78,7 +77,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     size_t  tpm2bPublicSize;
     uint8_t *tpm2bPrivate;
     size_t  tpm2bPrivateSize;
-    char *policy = NULL;
+    char *policy;
     TSS2_RC r = Fapi_GetTpmBlobs (fctx, ctx.path, &tpm2bPublic,
         &tpm2bPublicSize, &tpm2bPrivate, &tpm2bPrivateSize, &policy);
     if (r != TSS2_RC_SUCCESS) {
@@ -87,32 +86,42 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     }
 
     /* Write returned data to file(s) */
-    r = open_write_and_close (ctx.tpm2bPublic, ctx.overwrite, tpm2bPublic,
-        tpm2bPublicSize);
-    if (r){
-        LOG_PERR ("open_write_and_close tpm2bPublic", r);
-        return 1;
+    if (ctx.tpm2bPublic) {
+        r = open_write_and_close (ctx.tpm2bPublic, ctx.overwrite, tpm2bPublic,
+            tpm2bPublicSize);
+        if (r) {
+            LOG_PERR ("open_write_and_close tpm2bPublic", r);
+            Fapi_Free (tpm2bPublic);
+            return 1;
+        }
     }
-    r = open_write_and_close (ctx.tpm2bPrivate, ctx.overwrite, tpm2bPrivate,
-        tpm2bPrivateSize);
-    if (r){
-        LOG_PERR ("open_write_and_close tpm2bPrivate", r);
-        Fapi_Free (tpm2bPublic);
-        return 1;
-    }
-    if (policy){
-        r = open_write_and_close (ctx.policy, ctx.overwrite, policy,
-            strlen(policy));
-        if (r){
-            LOG_PERR ("open_write_and_close policy", r);
+
+    if (ctx.tpm2bPrivate) {
+        r = open_write_and_close (ctx.tpm2bPrivate, ctx.overwrite, tpm2bPrivate,
+            tpm2bPrivateSize);
+        if (r) {
+            LOG_PERR ("open_write_and_close tpm2bPrivate", r);
             Fapi_Free (tpm2bPublic);
             Fapi_Free (tpm2bPrivate);
             return 1;
         }
-        Fapi_Free(policy);
     }
 
+    if (ctx.policy) {
+        r = open_write_and_close (ctx.policy, ctx.overwrite, policy,
+            strlen(policy));
+        if (r) {
+            LOG_PERR ("open_write_and_close policy", r);
+            Fapi_Free (tpm2bPublic);
+            Fapi_Free (tpm2bPrivate);
+            Fapi_Free (policy);
+            return 1;
+        }
+    }
+
+    Fapi_Free (policy);
     Fapi_Free (tpm2bPublic);
     Fapi_Free (tpm2bPrivate);
+
     return 0;
 }

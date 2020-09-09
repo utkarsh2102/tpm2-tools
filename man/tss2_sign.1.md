@@ -18,39 +18,42 @@
 
 These are the available options:
 
-  * **-p**, **\--keyPath**:
+  * **-p**, **\--keyPath** _STRING_:
 
-    The path to the signing key. MUST NOT be NULL.
+    The path to the signing key.
 
-  * **-s**, **\--padding**:
+  * **-s**, **\--padding** _STRING_:
 
-    The padding scheme used. Possible values are “RSA_SSA”, “RSA_PSS” (case insensitive). MAY be NULL.
+    The padding scheme used. Possible values are "RSA_SSA", "RSA_PSS" (case insensitive). Optional parameter.
+    If omitted, the default padding specified in the crypto profile is used.
 
-  * **-c**, **\--certificate**:
+  * **-c**, **\--certificate** _FILENAME_ or _-_ (for stdout):
 
-    The certificate associated with keyPath in PEM format. MAY be NULL.
+    The certificate associated with keyPath in PEM format. Optional parameter.
 
-  * **-d**, **\--digest**:
+  * **-d**, **\--digest** _FILENAME_ or _-_ (for stdin):
 
-    The data to be signed, already hashed. MUST NOT be NULL.
+    The data to be signed, already hashed.
 
   * **-f**, **\--force**:
 
     Force overwriting the output file.
 
-  * **-k**, **\--publicKey**:
+  * **-k**, **\--publicKey** _FILENAME_ or _-_ (for stdout):
 
-    The public key associated with keyPath in PEM format. MAY be NULL.
+    The public key associated with keyPath in PEM format. Optional parameter.
 
-  * **-o**, **\--signature**:
+  * **-o**, **\--signature** _FILENAME_ or _-_ (for stdout):
 
-    Returns the signature in binary form. MUST NOT be NULL.
+    Returns the signature in binary form.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
 
-tss2_sign --keyPath HS/SRK/myRSASign --padding "RSA_PSS" --digest digest.file --signature signature.file --publicKey public_key.file
+```
+tss2_sign --keyPath HS/SRK/myRSASign --padding "RSA_PSS" --digest digest.file --signature signature.file --publicKey publicKey.file
+```
 
 # RETURNS
 

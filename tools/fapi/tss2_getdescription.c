@@ -39,7 +39,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"description" , required_argument, NULL, 'o'},
         {"force"       , no_argument      , NULL, 'f'},
     };
-    return (*opts = tpm2_options_new ("o:f:p:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("o:fp:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -67,7 +67,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     r = open_write_and_close (ctx.description, ctx.overwrite, description,
         strlen(description));
     if (r){
-        LOG_PERR ("open_read_and_close description", r);
+        LOG_PERR ("open_write_and_close description", r);
         Fapi_Free (description);
         return 1;
     }

@@ -22,27 +22,28 @@ These are the available options:
 
     Force overwriting the output file.
 
-  * **-p**, **\--path**:
+  * **-p**, **\--path** _STRING_:
 
-    The path of the object for which the blobs will be returned. MUST NOT be NULL.
+    The path of the object for which the blobs will be returned.
 
-  * **-u**, **\--tpm2bPublic**:
+  * **-u**, **\--tpm2bPublic** _FILENAME_ or _-_ (for stdout):
 
-    The returned public area of the object as a marshalled TPM2B_PUBLIC. MAY be NULL.
+    The returned public area of the object as a marshalled TPM2B_PUBLIC. Optional parameter.
 
-  * **-r**, **\--tpm2bPrivate**:
+  * **-r**, **\--tpm2bPrivate** _FILENAME_ or _-_ (for stdout):
 
-    The returned private area of the object as a marshalled TPM2B_PRIVATE. MAY be NULL.
+    The returned private area of the object as a marshalled TPM2B_PRIVATE. Optional parameter.
 
-  * **-l**, **\--policy**:
+  * **-l**, **\--policy** _FILENAME_ or _-_ (for stdout):
 
-    The returned policy associated with the object, encoded in JSON. policy MAY be NULL.
+    The returned policy associated with the object, encoded in JSON. Optional parameter.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
-tss2_gettpmblobs --path HS/SRK/myRSACrypt --tpm2bPublic public.file --tpm2bPrivate private.file --policy policy.file
+```
+tss2_gettpmblobs --path HS/SRK/myRSACrypt --tpm2bPublic tpm2bPublic.file --tpm2bPrivate tpm2bPrivate.file --policy policy.file
+```
 
 # RETURNS
 

@@ -11,30 +11,30 @@
 
 # DESCRIPTION
 
-**tss2_getrandom**(1) - This command uses the TPM to create an array of random bytes. This function may perform multiple calls to the TPM if the number of bytes requested by the caller is larger than the maximum number of bytes that the TPM will return per call.
-
+**tss2_getrandom**(1) - This command uses the TPM to create an array of random bytes.
 
 # OPTIONS
 
 These are the available options:
 
-  * **-n**, **\--numBytes**: \<number\>
+  * **-n**, **\--numBytes** _INTEGER_:
 
-    The number of bytes requested by the caller
+    The number of bytes requested by the caller.
 
   * **-f**, **\--force**:
 
     Force overwriting the output file.
 
-  * **-o**, **\--data**: \<filename\>
+  * **-o**, **\--data** _FILENAME_ or _-_ (for stdout):
 
-    The returned random bytes. MUST NOT be NULL.
+    The returned random bytes.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
+```
     tss2_getrandom --numBytes 20 -data - | hexdump -C
+```
 
 # RETURNS
 

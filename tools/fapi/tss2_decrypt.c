@@ -43,7 +43,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"force"      , no_argument      , NULL, 'f'},
         {"plainText"     , required_argument, NULL, 'o'},
     };
-    return (*opts = tpm2_options_new ("i:f:o:p:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("i:fo:p:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -79,6 +79,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     r = Fapi_Decrypt (fctx, ctx.keyPath, cipherText, cipherTextSize,
         &plainText, &plainTextSize);
     if (r != TSS2_RC_SUCCESS) {
+        free(cipherText);
         LOG_PERR ("Fapi_Decrypt", r);
         return 1;
     }
@@ -89,6 +90,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         plainTextSize);
     if (r){
         LOG_PERR ("open_write_and_close plainText", r);
+        Fapi_Free (plainText);
         return r;
     }
 

@@ -39,7 +39,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
         {"path"    , required_argument, NULL, 'p'},
         {"x509certData", required_argument, NULL, 'o'}
     };
-    return (*opts = tpm2_options_new ("f:p:o:", ARRAY_LEN(topts), topts,
+    return (*opts = tpm2_options_new ("fp:o:", ARRAY_LEN(topts), topts,
                                       on_option, NULL, 0)) != NULL;
 }
 
@@ -67,7 +67,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     r = open_write_and_close (ctx.x509cert, ctx.overwrite, x509certData,
         strlen(x509certData));
     if (r){
-        LOG_PERR ("open_read_and_close x509certData", r);
+        LOG_PERR ("open_write_and_close x509certData", r);
         Fapi_Free (x509certData);
         return 1;
     }

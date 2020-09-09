@@ -22,15 +22,16 @@ These are the available options:
 
     Force overwriting the output file.
 
-  * **-o**, **\--certificates**:
+  * **-o**, **\--certificates** _FILENAME_ or _-_ (for stdout):
 
-    Returns a continuous buffer containing the concatenated platform certificates. MUST NOT be NULL.
+    Returns a continuous buffer containing the concatenated platform certificates.
 
 [common tss2 options](common/tss2-options.md)
 
 # EXAMPLE
-
-tss2_getplatformcertificates --certificates platform.certs
+```
+tss2_getplatformcertificates --certificates certificates.file
+```
 
 # RETURNS
 

@@ -18,21 +18,42 @@
 
 These are the available options:
 
-  * **-p**, **\--path**:
+  * **-p**, **\--path** _STRING_:
 
-    The path to the new key. MUST NOT be NULL.
+    The path to the new key.
 
-  * **-t**, **\--type**:
+  * **-t**, **\--type** _STRING_:
 
-    Identifies the intended usage. For possible values see FAPI specification. MAY be NULL.
+    Identifies the intended usage. Optional parameter.
+    Types may be any comma-separated combination of:
 
-  * **-P**, **\--policyPath**:
+        - "sign": Sets the sign attribute of a key.
+        - "decrypt": Sets the decrypt attribute of a key.
+        - Hint: If neither sign nor decrypt are provided, both attributes are set.
+        - "restricted": Sets the restricted attribute of a key.
+        - Hint: If restricted is set, sign or decrypt (but not both) need to be set.
+        - "exportable": Clears the fixedTPM and fixedParent attributes of a key or
+          sealed object.
+        - "noda": Sets the noda attribute of a key or NV index.
+        - "system": Stores the data blobs and metadata for a created key or seal
+          in the system-wide directory instead of user's personal directory.
+        - A hexadecimal number (e.g. "0x81000001"): Marks a key object to be
+          made persistent and sets the persistent object handle to this value.
 
-    The policy to be associated with the new key. policyPath MAY be NULL. If NULL then no policy will be associated with the key.
+  * **-P**, **\--policyPath** _STRING_:
 
-  * **-a**, **\--authValue**:
+    The policy to be associated with the new key. Optional parameter. If omitted
+    then no policy will be associated with the key.
 
-    The new authorization value for the key. authValue MAY be NULL. If NULL then the authorization value will be the empty string.
+    A policyPath is composed of two elements, separated by "/". A policyPath
+    starts with "/policy". The second path element identifies the policy
+    or policy template using a meaningful name.
+
+  * **-a**, **\--authValue** _STRING_:
+
+    The new UTF-8 password. Optional parameter. If it is neglected then the user
+    is queried interactively for a password. To set no password, this option
+    should be used with the empty string ("").
 
 [common tss2 options](common/tss2-options.md)
 
@@ -40,15 +61,15 @@ These are the available options:
 
 ## Create a key without password
 ```
-tss2_createkey --path HS/SRK/myRsaCryptKey --type "noDa, decrypt"
+tss2_createkey --path HS/SRK/myRsaCryptKey --type "noDa, decrypt" --authValue ""
 ```
 
 ## Create a key, ask for password on the command line
 ```
-tss2_createkey --path HS/SRK/myRsaCryptKey --type "noDa, decrypt" --authValue
+tss2_createkey --path HS/SRK/myRsaCryptKey --type "noDa, decrypt"
 ```
 
-## Create a key with password “abc”.
+## Create a key with password "abc".
 ```
 tss2_createkey --path HS/SRK/myRsaCryptKey --type "noDa, decrypt" --authValue abc
 ```
