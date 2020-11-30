@@ -14,10 +14,9 @@ Build-Depends: autoconf,
                libtss2-dev (>= 2.3.0),
                pandoc,
                pkg-config,
-               python3-yaml,
                uuid-dev,
                xsltproc
-Homepage: https://github.com/01org/tpm2.0-tools
+Homepage: https://github.com/tpm2-software/tpm2-tools
 Standards-Version: 4.4.1
 Vcs-Browser: https://salsa.debian.org/debian/tpm2-tools
 Vcs-Git: https://salsa.debian.org/debian/tpm2-tools.git

@@ -38,3 +38,4 @@ configure
 lib/config.h.in
 aminclude_static.am
 src_vars.mk
+test/integration/fapi/*_ecc.sh
