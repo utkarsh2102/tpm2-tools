@@ -80,7 +80,8 @@ static bool evaluate_populate_pcr_digests(TPML_PCR_SELECTION *pcr_selections,
 }
 
 tool_rc tpm2_policy_build_pcr(ESYS_CONTEXT *ectx, tpm2_session *policy_session,
-        const char *raw_pcrs_file, TPML_PCR_SELECTION *pcr_selections) {
+        const char *raw_pcrs_file, TPML_PCR_SELECTION *pcr_selections,
+        TPM2B_DIGEST *raw_pcr_digest) {
 
     TPML_DIGEST pcr_values = { .count = 0 };
 
@@ -88,6 +89,26 @@ tool_rc tpm2_policy_build_pcr(ESYS_CONTEXT *ectx, tpm2_session *policy_session,
         LOG_ERR("No pcr selection data specified!");
         return tool_rc_general_error;
     }
+
+
+    TPM2B_DIGEST pcr_digest = TPM2B_TYPE_INIT(TPM2B_DIGEST, buffer);
+    TPMI_ALG_HASH auth_hash = tpm2_session_get_authhash(policy_session);
+    ESYS_TR handle = tpm2_session_get_handle(policy_session);
+
+    /*
+     * If digest of all PCRs is directly given, handle it here.
+     */
+    if (raw_pcr_digest &&
+    raw_pcr_digest->size != tpm2_alg_util_get_hash_size(auth_hash)) {
+        LOG_ERR("Specified PCR digest length not suitable with the policy session digest");
+        return tool_rc_general_error;
+    }
+    // Call the PolicyPCR command
+    if (raw_pcr_digest) {
+        return tpm2_policy_pcr(ectx, handle, ESYS_TR_NONE, ESYS_TR_NONE,
+            ESYS_TR_NONE, raw_pcr_digest, pcr_selections);
+    }
+
 
     bool result = evaluate_populate_pcr_digests(pcr_selections, raw_pcrs_file,
             &pcr_values);
@@ -139,9 +160,6 @@ tool_rc tpm2_policy_build_pcr(ESYS_CONTEXT *ectx, tpm2_session *policy_session,
     }
 
     // Calculate hashes
-    TPM2B_DIGEST pcr_digest = TPM2B_TYPE_INIT(TPM2B_DIGEST, buffer);
-    TPMI_ALG_HASH auth_hash = tpm2_session_get_authhash(policy_session);
-
     result = tpm2_openssl_hash_pcr_values(auth_hash, &pcr_values, &pcr_digest);
     if (!result) {
         LOG_ERR("Could not hash pcr values");
@@ -149,8 +167,6 @@ tool_rc tpm2_policy_build_pcr(ESYS_CONTEXT *ectx, tpm2_session *policy_session,
     }
 
     // Call the PolicyPCR command
-    ESYS_TR handle = tpm2_session_get_handle(policy_session);
-
     return tpm2_policy_pcr(ectx, handle, ESYS_TR_NONE, ESYS_TR_NONE,
             ESYS_TR_NONE, &pcr_digest, pcr_selections);
 }
@@ -375,7 +391,8 @@ tool_rc tpm2_policy_build_policysigned(ESYS_CONTEXT *ectx,
         tpm2_session *policy_session, tpm2_loaded_object *auth_entity_obj,
         TPMT_SIGNATURE *signature, INT32 expiration, TPM2B_TIMEOUT **timeout,
         TPMT_TK_AUTH **policy_ticket, const char *policy_qualifier_data,
-        bool is_nonce_tpm, const char *raw_data_path) {
+        bool is_nonce_tpm, const char *raw_data_path,
+        const char *cphash_path) {
 
     bool result = true;
 
@@ -389,6 +406,19 @@ tool_rc tpm2_policy_build_policysigned(ESYS_CONTEXT *ectx,
         result = tpm2_util_bin_from_hex_or_file(policy_qualifier_data,
                 &policy_qualifier.size,
                 policy_qualifier.buffer);
+        if (!result) {
+            return tool_rc_general_error;
+        }
+    }
+
+    /*
+     * CpHashA (digest of command parameters for approved command) optional.
+     * If not specified default to NULL
+     */
+    TPM2B_DIGEST cphash = TPM2B_EMPTY_INIT;
+
+    if (cphash_path) {
+        bool result = files_load_digest(cphash_path, &cphash);
         if (!result) {
             return tool_rc_general_error;
         }
@@ -411,7 +441,7 @@ tool_rc tpm2_policy_build_policysigned(ESYS_CONTEXT *ectx,
      */
     if (raw_data_path) {
         uint16_t raw_data_len = (nonce_tpm ? nonce_tpm->size : 0) +
-            sizeof(INT32) + policy_qualifier.size;
+            sizeof(INT32) + cphash.size + policy_qualifier.size;
 
         uint8_t *raw_data = malloc(raw_data_len);
         if (!raw_data) {
@@ -419,17 +449,22 @@ tool_rc tpm2_policy_build_policysigned(ESYS_CONTEXT *ectx,
             rc = tool_rc_general_error;
             goto tpm2_policy_build_policysigned_out;
         }
-        //nonceTPM
+        /* nonceTPM */
         uint16_t offset = 0;
         if (nonce_tpm) {
             memcpy(raw_data, nonce_tpm->buffer, nonce_tpm->size);
             offset += nonce_tpm->size;
         }
-        //expiration
+        /* expiration */
         UINT32 endswap_data = tpm2_util_endian_swap_32(expiration);
         memcpy(raw_data + offset, (UINT8 *)&endswap_data, sizeof(INT32));
         offset += sizeof(INT32);
-        //policyRef
+        /* cpHash */
+        if (cphash_path) {
+            memcpy(raw_data + offset, cphash.buffer, cphash.size);
+            offset += cphash.size;
+        }
+        /* policyRef */
         memcpy(raw_data + offset, policy_qualifier.buffer,
             policy_qualifier.size);
 
@@ -447,7 +482,7 @@ tool_rc tpm2_policy_build_policysigned(ESYS_CONTEXT *ectx,
 
     rc = tpm2_policy_signed(ectx, auth_entity_obj, policy_session_handle,
         signature, expiration, timeout, policy_ticket, &policy_qualifier,
-        nonce_tpm);
+        nonce_tpm, &cphash);
 
 tpm2_policy_build_policysigned_out:
     Esys_Free(nonce_tpm);

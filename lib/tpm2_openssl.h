@@ -17,6 +17,21 @@
 #define LIB_TPM2_OPENSSL_OPENSSL_PRE11
 #endif
 
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L
+#define EC_POINT_set_affine_coordinates_tss(group, tpm_pub_key, bn_x, bn_y, dmy) \
+        EC_POINT_set_affine_coordinates(group, tpm_pub_key, bn_x, bn_y, dmy)
+
+#define EC_POINT_get_affine_coordinates_tss(group, tpm_pub_key, bn_x, bn_y, dmy) \
+        EC_POINT_get_affine_coordinates(group, tpm_pub_key, bn_x, bn_y, dmy)
+
+#else
+#define EC_POINT_set_affine_coordinates_tss(group, tpm_pub_key, bn_x, bn_y, dmy) \
+        EC_POINT_set_affine_coordinates_GFp(group, tpm_pub_key, bn_x, bn_y, dmy)
+
+#define EC_POINT_get_affine_coordinates_tss(group, tpm_pub_key, bn_x, bn_y, dmy) \
+        EC_POINT_get_affine_coordinates_GFp(group, tpm_pub_key, bn_x, bn_y, dmy)
+#endif /* OPENSSL_VERSION_NUMBER >= 0x10101000L */
+
 #if defined(LIB_TPM2_OPENSSL_OPENSSL_PRE11)
 int RSA_set0_key(RSA *r, BIGNUM *n, BIGNUM *e, BIGNUM *d);
 void RSA_get0_factors(const RSA *r, const BIGNUM **p, const BIGNUM **q);
@@ -39,6 +54,10 @@ int ECDSA_SIG_set0(ECDSA_SIG *sig, BIGNUM *r, BIGNUM *s);
  */
 typedef unsigned char *(*digester)(const unsigned char *d, size_t n,
         unsigned char *md);
+
+static inline const char *tpm2_openssl_get_err(void) {
+    return ERR_error_string(ERR_get_error(), NULL);
+}
 
 /**
  * Get an openssl hash algorithm ID from a tpm hashing algorithm ID.
@@ -117,6 +136,40 @@ bool tpm2_openssl_hash_pcr_values(TPMI_ALG_HASH halg, TPML_DIGEST *digests,
  */
 bool tpm2_openssl_hash_pcr_banks(TPMI_ALG_HASH hashAlg,
         TPML_PCR_SELECTION *pcr_select, tpm2_pcrs *pcrs, TPM2B_DIGEST *digest);
+
+/*
+ * Hash a list of PCR digests, supporting multiple banks.
+ * The data in TPML_PCR_SELECTION and tpm2_pcrs is in little endian format.
+ *
+ * @param halg
+ *  The hashing algorithm to use.
+ * @param pcr_select
+ *  The list that specifies which PCRs are selected.
+ * @param pcrs
+ *  The list of PCR banks, each containing a list of PCR digests to hash.
+ ^ * @param digest
+ ^ *  The result of hashing digests with halg.
+ * @return
+ *  true on success, false on error.
+ */
+bool tpm2_openssl_hash_pcr_banks_le(TPMI_ALG_HASH hashAlg,
+        TPML_PCR_SELECTION *pcr_select, tpm2_pcrs *pcrs, TPM2B_DIGEST *digest);
+
+/**
+ * Extend a PCR with a new digest.
+ * @param halg
+ *  The hashing algorithm to use.
+ * @param pcr
+ *  A buffer with the current value of the PCR, will be updated in place.
+ * @param data
+ *  The new digest to be added to the current PCR.
+ * @param length
+ *  Length of the new data to be added to the digest.
+ * @return
+ *  true on success, false on error.
+ */
+bool tpm2_openssl_pcr_extend(TPMI_ALG_HASH halg, BYTE *pcr,
+        const BYTE *data, UINT16 length);
 
 /**
  * Obtains an OpenSSL EVP_CIPHER_CTX dealing with version
@@ -211,18 +264,6 @@ tpm2_openssl_load_rc tpm2_openssl_load_private(const char *path,
  */
 bool tpm2_openssl_load_public(const char *path, TPMI_ALG_PUBLIC alg,
         TPM2B_PUBLIC *pub);
-
-/**
- * Retrieves a public portion of an RSA key from a PEM file.
- *
- * @param f
- *  The FILE object that is open for reading the path.
- * @param path
- *  The path to load from.
- * @return
- *  The public structure.
- */
-RSA* tpm2_openssl_get_public_RSA_from_pem(FILE *f, const char *path);
 
 /**
  * Retrieves a public portion of an ECC key from a PEM file.

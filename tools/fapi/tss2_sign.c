@@ -7,9 +7,6 @@
 
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed commandline parameters */
 static struct cxt {
     char const *keyPath;
@@ -50,7 +47,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"keyPath",     required_argument, NULL, 'p'},
         {"padding",     required_argument, NULL, 's'},
@@ -66,7 +63,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
 
     /* Check availability of required parameters */
     if (!ctx.digest) {
@@ -99,7 +96,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     char *publicKey, *certificate = NULL;
     TSS2_RC r = open_read_and_close (ctx.digest, (void**)&digest, &digestSize);
     if (r){
-        LOG_PERR ("open_read_and_close digest", r);
         return 1;
     }
 
@@ -118,7 +114,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
             r = open_write_and_close (ctx.certificate, ctx.overwrite,
                 certificate, strlen(certificate));
             if (r) {
-                LOG_PERR ("open_write_and_close certificate", r);
                 Fapi_Free (certificate);
                 Fapi_Free (signature);
                 Fapi_Free (publicKey);
@@ -131,7 +126,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.signature, ctx.overwrite, signature,
             signatureSize);
         if (r) {
-            LOG_PERR ("open_write_and_close certificate signature", r);
             Fapi_Free (signature);
             Fapi_Free (publicKey);
             return 1;
@@ -143,7 +137,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.publicKey, ctx.overwrite, publicKey,
                 strlen(publicKey));
         if (r) {
-            LOG_PERR ("open_write_and_close certificate publicKey", r);
             Fapi_Free (publicKey);
             return 1;
         }
@@ -152,3 +145,5 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
 
     return 0;
 }
+
+TSS2_TOOL_REGISTER("sign", tss2_tool_onstart, tss2_tool_onrun, NULL)

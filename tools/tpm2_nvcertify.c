@@ -43,7 +43,7 @@ struct tpm_nvcertify_ctx {
 };
 
 static tpm_nvcertify_ctx ctx = {
-    .halg = TPM2_ALG_SHA1,
+    .halg = TPM2_ALG_NULL,
     .sig_scheme = TPM2_ALG_NULL,
 };
 
@@ -158,7 +158,7 @@ static bool on_arg(int argc, char **argv) {
     return on_arg_nv_index(argc, argv, &ctx.nv_index);
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     static const struct option topts[] = {
         { "signingkey-context", required_argument, NULL, 'C' },
@@ -252,7 +252,7 @@ static tool_rc process_nvcertify_input(ESYS_CONTEXT *ectx,
      * Set appropriate signature scheme for key type
      */
     rc = tpm2_alg_util_get_signature_scheme(ectx,
-        ctx.signing_key.object.tr_handle, ctx.halg, ctx.sig_scheme, in_scheme);
+        ctx.signing_key.object.tr_handle, &ctx.halg, ctx.sig_scheme, in_scheme);
     if (rc != tool_rc_success) {
         LOG_ERR("bad signature scheme for key type!");
         return rc;
@@ -295,7 +295,7 @@ static tool_rc process_nvcertify_output(TPMT_SIGNATURE *signature,
     return tool_rc_success;
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
 
     /* opts is unused, avoid compiler warning */
     UNUSED(flags);
@@ -347,7 +347,7 @@ tpm2_tool_onrun_out:
     return rc;
 }
 
-tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
+static tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
     UNUSED(ectx);
 
     tool_rc rc = tool_rc_success;
@@ -367,3 +367,6 @@ tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
 
     return rc;
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("nvcertify", tpm2_tool_onstart, tpm2_tool_onrun, tpm2_tool_onstop, NULL)

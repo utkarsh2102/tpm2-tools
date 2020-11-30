@@ -10,7 +10,7 @@ _tss2_unseal()
             return;;
         -!(-*)o | --data)
             _filedir
-            COMPREPLY+=( '-' )
+            if [ x"$cur" = x ]; then COMPREPLY+=( '-' ); fi
             return;;
         -!(-*)p | --path )
             return;;
@@ -18,7 +18,7 @@ _tss2_unseal()
 
     $split && return
 
-    COMPREPLY=( $(compgen -W "-h --help -v --version --data -o --path -p" -- "$cur") )
+    COMPREPLY=( $(compgen -W "-h --help -v --version --data= -o -f --force --path= -p" -- "$cur") )
     [[ $COMPREPLY == *= ]] && compopt -o nospace
 } &&
 complete -F _tss2_unseal tss2_unseal

@@ -35,6 +35,8 @@ struct tpm2_policysigned_ctx {
 
     const char *raw_data_path;
 
+    const char *cphash_path;
+
     const char *policy_qualifier_data;
 
     union {
@@ -48,9 +50,11 @@ struct tpm2_policysigned_ctx {
 };
 
 static tpm2_policysigned_ctx ctx = {
-    .signature = { .sigAlg = TPM2_ALG_RSASSA,
-                   .signature.rsassa.hash = TPM2_ALG_SHA256,
-                 },
+    .signature = {
+        .sigAlg = TPM2_ALG_RSASSA,
+        .signature.rsassa.hash = TPM2_ALG_SHA256,
+    },
+    .halg = TPM2_ALG_SHA256
 };
 
 static bool on_option(char key, char *value) {
@@ -98,6 +102,9 @@ static bool on_option(char key, char *value) {
     case 2:
         ctx.raw_data_path = value;
         break;
+    case 3:
+        ctx.cphash_path = value;
+        break;
     case 'x':
         ctx.is_nonce_tpm = true;
         break;
@@ -113,7 +120,7 @@ static bool on_option(char key, char *value) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     static struct option topts[] = {
         { "policy",         required_argument, NULL, 'L' },
@@ -128,6 +135,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
         { "ticket",         required_argument, NULL,  0  },
         { "timeout",        required_argument, NULL,  1  },
         { "raw-data",       required_argument, NULL,  2  },
+        { "cphash-input",   required_argument, NULL,  3  },
     };
 
     *opts = tpm2_options_new("L:S:g:s:f:c:t:q:x", ARRAY_LEN(topts), topts, on_option,
@@ -136,7 +144,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
     return *opts != NULL;
 }
 
-bool is_input_option_args_valid(void) {
+static bool is_input_option_args_valid(void) {
 
     if (!ctx.context_arg) {
             LOG_ERR("Must specify verifying key context -c.");
@@ -159,7 +167,7 @@ bool is_input_option_args_valid(void) {
     return true;
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
 
     UNUSED(flags);
 
@@ -200,7 +208,7 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     rc = tpm2_policy_build_policysigned(ectx, ctx.session,
         &ctx.key_context_object, &ctx.signature, ctx.expiration, &timeout,
         &policy_ticket, ctx.policy_qualifier_data, ctx.is_nonce_tpm,
-        ctx.raw_data_path);
+        ctx.raw_data_path, ctx.cphash_path);
     if (rc != tool_rc_success) {
         LOG_ERR("Could not build policysigned TPM");
         goto tpm2_tool_onrun_out;
@@ -248,8 +256,11 @@ tpm2_tool_onrun_out:
     return rc;
 }
 
-tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
+static tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
 
     UNUSED(ectx);
     return tpm2_session_close(&ctx.session);
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("policysigned", tpm2_tool_onstart, tpm2_tool_onrun, tpm2_tool_onstop, NULL)

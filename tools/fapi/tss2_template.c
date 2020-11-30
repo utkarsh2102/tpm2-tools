@@ -16,8 +16,14 @@
 #include <stdarg.h>
 #include <errno.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
+
 #include "tools/fapi/tss2_template.h"
 #include "lib/config.h"
+
+/* needed by tpm2_util and tpm2_option functions */
+bool output_enabled = false;
 
 static struct termios old;
 
@@ -54,7 +60,7 @@ static bool execute_man(char *prog_name, bool show_errors) {
         char *manpage = basename(prog_name);
         execlp("man", "man", manpage, NULL);
     } else {
-        if ((pid = waitpid(pid, &status, 0)) == -1) {
+        if (waitpid(pid, &status, 0) == -1) {
             LOG_ERR("Waiting for child process that executes man failed, error:"
                     " %s", strerror(errno));
             return false;
@@ -70,8 +76,7 @@ static bool execute_man(char *prog_name, bool show_errors) {
 static tpm2_option_code tss2_handle_options (
     int            argc,
     char         **argv,
-    tpm2_options **tool_opts,
-    FAPI_CONTEXT  *fctx) {
+    tpm2_options **tool_opts) {
     tpm2_option_code rc = tpm2_option_code_err;
     bool show_help = false, manpager = true, explicit_manpager = false;
     struct option long_options [] = {
@@ -123,38 +128,11 @@ static tpm2_option_code tss2_handle_options (
                 fprintf (stderr, "Not enough memory\n");
                 goto out;
             }
-            char *info;
-            TSS2_RC ret = Fapi_GetInfo(fctx, &info);
-            if (ret != TSS2_RC_SUCCESS) {
-                fprintf (stderr, "Fapi_GetInfo returned %u\n", ret);
-                free(prog_name);
-                goto out;
-            }
 
-            char *version = NULL;
-            char *t = strstr(info, "\"version\"");
-            if (t) {
-                t = t + strlen("\"version\"");
-                ret = sscanf(t, "%*[^\"]\"%m[^\"]%*[*]", &version);
-                /* Version string is not larger than 128 characters */
-                if (ret!=1 || strlen(version) > 128 ) {
-                    free(version);
-                    version = "not found";
-                    t = NULL;
-                }
-            }
-            else{
-                version = "not found";
-            }
-            Fapi_Free(info);
-
-            printf("tool=\"%s\" version=\"%s\" fapi-version=\"%s\"\n",
-                basename (prog_name), VERSION, version);
+            printf("tool=\"%s\" version=\"%s\"\n", basename (prog_name),
+                VERSION);
 
             free(prog_name);
-            if (t) {
-                free(version);
-            }
             }
             rc = tpm2_option_code_stop;
             goto out;
@@ -211,16 +189,20 @@ char *password = NULL;
 
 TSS2_RC auth_callback(
 #ifdef FAPI_3_0
-    __attribute__((unused)) char const *objectPath,
+    char const                   *objectPath,
     char const                   *description,
     char const                  **auth,
+    void                         *userdata)
+{
 #else /* FAPI_3_0 */
     __attribute__((unused)) FAPI_CONTEXT *fapi_context,
     char const                   *description,
     char                        **auth,
-#endif /* FAPI_3_0 */
-    __attribute__((unused)) void *userdata)
+    void                         *userdata)
 {
+    const char *objectPath = "object";
+#endif /* FAPI_3_0 */
+
     if (password != NULL) {
         free(password);
         password = NULL;
@@ -230,8 +212,12 @@ TSS2_RC auth_callback(
     tcgetattr (STDIN_FILENO, &old);
     new = old;
     new.c_lflag &= ~(ICANON | ECHO);
-    /* TODO: For new CLI-Break add use of objectPath here. */
-    printf ("Authorize object %s: ", description);
+
+    if (userdata) {
+        printf("%s:", (const char *) userdata);
+    } else {
+        printf ("Authorize %s \"%s\": ", objectPath, description);
+    }
     tcsetattr (STDIN_FILENO, TCSANOW, &new);
 
     size_t input_size = 0;
@@ -266,7 +252,7 @@ TSS2_RC auth_callback(
 
 TSS2_RC branch_callback(
 #ifdef FAPI_3_0
-    __attribute__((unused)) char const *objectPath,
+    char const                     *objectPath,
 #else /* FAPI_3_0 */
     __attribute__((unused)) FAPI_CONTEXT *fapi_context,
 #endif /* FAPI_3_0 */
@@ -276,8 +262,11 @@ TSS2_RC branch_callback(
     size_t                         *selectedBranch,
     __attribute__((unused)) void   *userData)
 {
-    /* TODO: For new CLI-Break add use of objectPath here. */
-    printf ("Select a branch for %s\n", description);
+#ifdef FAPI_3_0
+    printf ("Select a branch for %s \"%s\"\n", objectPath, description);
+#else /* FAPI_3_0 */
+    printf ("Select a branch for object \"%s\"\n", description);
+#endif /* FAPI_3_0 */
     for (size_t i = 0; i < numBranches; i++) {
         printf ("%4zu %s\n", i + 1, branchNames[i]);
     }
@@ -285,17 +274,17 @@ TSS2_RC branch_callback(
     while (1) {
         printf ("Your choice: ");
         if (scanf ("%zu", selectedBranch) != EOF) {
-            while (getchar () != '\n'); /* Consume all remainign input */
+            while (getchar () != '\n'); /* Consume all remaining input */
             if (*selectedBranch > numBranches || *selectedBranch < 1) {
                 fprintf (stderr, "The entered integer must be positive and "\
                     "less than %zu.\n", numBranches + 1);
             } else {
-                numBranches--;
+                (*selectedBranch)--; /* the user display/choice is always +1 */
                 return TSS2_RC_SUCCESS;
             }
         } else {
             fprintf (stderr, "No number received, but EOF.\n");
-            return TSS2_RC_SUCCESS;
+            return TSS2_FAPI_RC_GENERAL_FAILURE;
         }
     }
 }
@@ -311,17 +300,106 @@ static FAPI_CONTEXT* ctx_init(char const * uri) {
 }
 
 /*
+ * Build a list of the TSS2 tools linked into this executable
+ */
+#ifndef TSS2_TOOLS_MAX
+#define TSS2_TOOLS_MAX 1024
+#endif
+static const tss2_tool *tools[TSS2_TOOLS_MAX];
+static unsigned tool_count;
+
+void tss2_tool_register(const tss2_tool *tool) {
+
+    if (tool_count < TSS2_TOOLS_MAX) {
+        tools[tool_count++] = tool;
+    } else {
+        LOG_ERR("Over tool count");
+        abort();
+    }
+}
+
+static const char *tss2_tool_name(const char *arg) {
+
+    const char *name = rindex(arg, '/');
+    if (name) {
+        name++; // skip the '/'
+    } else {
+        name = arg; // use the full executable name as is
+    }
+
+    if (strncmp(name, "tss2_", 5) == 0) {
+        name += 5;
+    }
+
+    return name;
+}
+
+static const tss2_tool *tss2_tool_lookup(int *argc, char ***argv)
+{
+    // find the executable name in the path
+    // and skip "tss2_" prefix if it is present
+    const char *name = tss2_tool_name((*argv)[0]);
+
+    // if this was invoked as 'tss2', then try again with the second argument
+    if (strcmp(name, "tss2") == 0) {
+        if (--(*argc) == 0) {
+            return NULL;
+        }
+        (*argv)++;
+        name = tss2_tool_name((*argv)[0]);
+    }
+
+
+    // search the tools array for a matching name
+    for(unsigned i = 0 ; i < tool_count ; i++)
+    {
+        const tss2_tool * const tool = tools[i];
+        if (!tool || !tool->name) {
+            continue;
+        }
+        if (strcmp(name, tool->name) == 0) {
+            return tool;
+        }
+    }
+
+    // not found? should print a table of the tools
+    return NULL;
+}
+
+/*
  * This program is a template for TPM2 tools that use the FAPI. It does
  * nothing more than parsing command line options that allow the caller to
  * specify which FAPI function to call.
  */
 int main(int argc, char *argv[]) {
+
+    /* get rid of:
+     *   other write + read + execute (7)
+     */
+    umask(0007);
+
+    const tss2_tool * const tool = tss2_tool_lookup(&argc, &argv);
+    if (!tool) {
+        LOG_ERR("%s: unknown tool. Available tss2 commands:\n", argv[0]);
+        for(unsigned i = 0 ; i < tool_count ; i++) {
+            fprintf(stderr, "%s\n", tools[i]->name);
+        }
+        return EXIT_FAILURE;
+    }
     tpm2_options *tool_opts = NULL;
-    if (!tss2_tool_onstart (&tool_opts)) {
+    if (tool->onstart && !tool->onstart (&tool_opts)) {
         fprintf (stderr,"error retrieving tool options\n");
         return 1;
     }
     int ret = 1;
+
+    tpm2_option_code rc = tss2_handle_options (argc, argv, &tool_opts);
+
+    if (rc != tpm2_option_code_continue) {
+        ret = rc == tpm2_option_code_err ? 1 : 0;
+        goto free_opts;
+    }
+
     FAPI_CONTEXT *fctx = ctx_init (NULL);
     if (!fctx)
         goto free_opts;
@@ -339,14 +417,6 @@ int main(int argc, char *argv[]) {
         goto free_opts;
     }
 
-    tpm2_option_code rc = tss2_handle_options (argc, argv, &tool_opts, fctx);
-
-    if (rc != tpm2_option_code_continue) {
-        ret = rc == tpm2_option_code_err ? 1 : 0;
-        Fapi_Finalize (&fctx);
-        goto free_opts;
-    }
-
     /*
      * Call the specific tool, all tools implement this function instead of
      * 'main'.
@@ -354,10 +424,14 @@ int main(int argc, char *argv[]) {
      * rc 0 = success
      * rc -1 = show usage
      */
-    ret = tss2_tool_onrun(fctx);
+    ret = tool->onrun(fctx);
     if (ret < 0) {
         tpm2_print_usage(argv[0], tool_opts);
         ret = 1;
+    }
+
+    if (tool->onexit) {
+        tool->onexit();
     }
 
     /*
@@ -377,7 +451,7 @@ int open_write_and_close(const char* path, bool overwrite, const void *output,
 
     size_t length = 0;
 
-    if (output_len) {
+    if (output_len){
         length = output_len;
     }
 
@@ -488,25 +562,25 @@ char* ask_for_password() {
 #else /* FAPI_3_0 */
     char *pw;
 #endif /* FAPI_3_0 */
-    char *password = NULL;
+    char *ret_pw = NULL;
 
-    if (auth_callback (NULL, "Password", &pw, NULL))
+    if (auth_callback (NULL, NULL, &pw, "New password"))
         goto error;
 
 #ifdef FAPI_3_0
-    password = strdup(pw);
-    if (!password) {
+    ret_pw = strdup(pw);
+    if (!ret_pw) {
         fprintf (stderr, "OOM\n");
         return NULL;
     }
-#else
-    password = pw;
+#else /* FAPI_3_0 */
+    ret_pw = pw;
 #endif /* FAPI_3_0 */
 
-    if (auth_callback (NULL, "Retype password", &pw, NULL))
+    if (auth_callback (NULL, NULL, &pw, "Re-enter new password"))
         goto error;
 
-    bool eq = !strcmp (password, pw);
+    bool eq = !strcmp (ret_pw, pw);
 #ifndef FAPI_3_0
     free(pw);
 #endif
@@ -515,11 +589,11 @@ char* ask_for_password() {
         goto error;
     }
 
-    return password;
+    return ret_pw;
 
 error:
-    if (password)
-        free(password);
+    if (ret_pw)
+        free(ret_pw);
 
     return NULL;
 }

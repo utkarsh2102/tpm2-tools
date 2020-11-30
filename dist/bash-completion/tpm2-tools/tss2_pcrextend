@@ -12,13 +12,13 @@ _tss2_pcrextend()
             return;;
         -!(-*)[il] | --data | --logData)
             _filedir
-            COMPREPLY+=( '-' )
+            if [ x"$cur" = x ]; then COMPREPLY+=( '-' ); fi
             return;;
     esac
 
     $split && return
 
-    COMPREPLY=( $(compgen -W "-h --help -v --version -x --pcr -i --data -l --logData -- "$cur") )
+    COMPREPLY=( $(compgen -W "-h --help -v --version -x --pcr= -i --data= -l --logData=" -- "$cur") )
     [[ $COMPREPLY == *= ]] && compopt -o nospace
 } &&
 complete -F _tss2_pcrextend tss2_pcrextend

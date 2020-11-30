@@ -6,12 +6,8 @@
 #include <string.h>
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed command line parameters */
 static struct cxt {
-    bool            pcr_set;
     uint32_t        pcr;
     char     const *data;
     char     const *logData;
@@ -26,7 +22,6 @@ static bool on_option(char key, char *value) {
                 "larger than 2**32 - 1\n", value);
             return false;
         }
-	ctx.pcr_set = true;
         break;
     case 'i':
         ctx.data = value;
@@ -39,7 +34,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"pcr"       , required_argument, NULL, 'x'},
         {"data", required_argument, NULL, 'i'},
@@ -50,9 +45,9 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
-    if (!ctx.pcr_set) {
+    if (!ctx.pcr) {
         fprintf (stderr, "No pcr provided, use --pcr\n");
         return -1;
     }
@@ -77,7 +72,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     TSS2_RC r = open_read_and_close (ctx.data, (void**)&data,
         &eventDataSize);
     if (r){
-        LOG_PERR ("open_read_and_close data", r);
         return -1;
     }
 
@@ -85,8 +79,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     if (ctx.logData) {
         r = open_read_and_close (ctx.logData, (void**)&logData, 0);
         if (r) {
-            LOG_PERR ("open_read_and_close logData", r);
-            Fapi_Free (data);
+            free (data);
             return -1;
         }
     }
@@ -94,6 +87,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Execute FAPI command with passed arguments */
     r = Fapi_PcrExtend(fctx, ctx.pcr, data, eventDataSize, logData);
     if (r != TSS2_RC_SUCCESS){
+        free (data);
         free (logData);
         LOG_PERR ("Fapi_PcrExtend", r);
         return 1;
@@ -104,3 +98,5 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
 
     return 0;
 }
+
+TSS2_TOOL_REGISTER("pcrextend", tss2_tool_onstart, tss2_tool_onrun, NULL)

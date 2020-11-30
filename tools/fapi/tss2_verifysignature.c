@@ -6,9 +6,6 @@
 
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed commandline parameters */
 static struct cxt {
     char const *digest;
@@ -33,7 +30,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"keyPath",     required_argument, NULL, 'p'},
         {"digest",      required_argument, NULL, 'd'},
@@ -44,7 +41,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
     if (!ctx.publicKeyPath) {
         fprintf (stderr, "public key path parameter not provided, use " \
@@ -76,12 +73,10 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     size_t digestSize, signatureSize;
     TSS2_RC r = open_read_and_close (ctx.digest, (void**)&digest, &digestSize);
     if (r){
-        LOG_PERR("open_read_and_close digest", r);
         return 1;
     }
     r = open_read_and_close (ctx.signature, (void**)&signature, &signatureSize);
     if (r) {
-        LOG_PERR("open_read_and_close signature", r);
         free (digest);
         return 1;
     }
@@ -90,6 +85,8 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     r = Fapi_VerifySignature (fctx, ctx.publicKeyPath,
         digest, digestSize, signature, signatureSize);
     if (r != TSS2_RC_SUCCESS){
+        free (digest);
+        free (signature);
         LOG_PERR("Fapi_Key_VerifySignature", r);
         return 1;
     }
@@ -97,3 +94,5 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     free (signature);
     return 0;
 }
+
+TSS2_TOOL_REGISTER("verifysignature", tss2_tool_onstart, tss2_tool_onrun, NULL)

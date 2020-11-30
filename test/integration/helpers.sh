@@ -2,6 +2,48 @@
 
 set -E
 
+# Return 0 if run by a TPM simulator, return 1 otherwise
+is_simulator() {
+    # both simulators mssim and swtpm have their vendor sting set to "SW":
+    # TPM2_PT_VENDOR_STRING_1:
+    #   raw: 0x53572020
+    #   value: "SW"
+    tpm2 getcap properties-fixed \
+    | grep -zP "TPM2_PT_VENDOR_STRING_1:\s*raw: 0x53572020" &>/dev/null
+}
+
+# Return 0 if algorithm is supported, return 1 otherwise
+# Error if TPM is simulator and algorithm is unsupported
+is_alg_supported() {
+    if tpm2 testparms $1 2> /dev/null; then
+        return 0
+    else
+        if is_simulator; then
+            echo "ERROR: $1 is not supported by the TPM simulator."
+            exit 1
+        else
+            echo "SKIP: Testing on a non-simulator TPM. Skipping unsupported algorithm $1"
+            return 1
+        fi
+    fi
+}
+
+# Return 0 if command is supported, return 1 otherwise
+# Error if TPM is simulator and command is unsupported
+is_cmd_supported() {
+    if tpm2 getcap commands | grep -i "$1:" &> /dev/null; then
+        return 0
+    else
+        if is_simulator; then
+            echo "ERROR: $1 is not supported by the TPM simulator."
+            exit 1
+        else
+            echo "SKIP: Testing on a non-simulator TPM. Skipping unsupported command $1"
+            return 1
+        fi
+    fi
+}
+
 function filter_algs_by() {
 
 python << pyscript
@@ -23,7 +65,7 @@ pyscript
 
 populate_algs() {
     algs="$(mktemp)"
-    tpm2_getcap algorithms > "${algs}"
+    tpm2 getcap algorithms > "${algs}"
     filter_algs_by "${algs}" "${1}"
     rm "${algs}"
 }
@@ -64,6 +106,64 @@ hash_alg_supported() {
             return
         fi
     done
+}
+
+# Get nice names of supported algorithms lengths
+# Does not work with hashes!
+# e.g. calling "populate_alg_lengths rsa" will print:
+# rsa1024
+# rsa2048
+populate_alg_lengths() {
+    #set -x
+    alg="$1"
+    local lengths="1 128 192 224 256 384 512 1024 2048 4096"
+    local populated=""
+    for len in $lengths; do
+        if tpm2 testparms "$alg$len" 2> /dev/null; then
+            if [ -z "$populated" ]; then
+                populated="$alg$len"
+            else
+                populated="$populated\n$alg$len"
+            fi
+        fi
+    done;
+    printf "$populated"
+}
+
+# Get nice name of the algorithm with its weakest supported key size
+# Does not work with hashes!
+# e.g. calling "weakest_alg aes" will print "aes128"
+weakest_alg() {
+    populate_alg_lengths "$1" | head -n1
+}
+
+# Get nice name of the algorithm with its strongest supported key size
+# Does not work with hashes!
+# e.g. calling "strongest_alg aes" will print "aes256"
+strongest_alg() {
+    populate_alg_lengths "$1" | tail -n1
+}
+
+# Get nice names of supported algorithm modes
+# Does not work with hashes!
+# e.g. calling "populate_alg_modes aes128" will print:
+# aes128cfb
+# aes128cbc
+populate_alg_modes() {
+    #set -x
+    alg="$1"
+    local modes="ctr ofb cbc cfb ecb"
+    local populated=""
+    for mode in $modes; do
+        if tpm2 testparms "$alg$mode" 2> /dev/null; then
+            if [ -z "$populated" ]; then
+                populated="$alg$mode"
+            else
+                populated="$populated\n$alg$mode"
+            fi
+        fi
+    done;
+    printf "$populated"
 }
 
 #
@@ -123,6 +223,7 @@ function recreate_info() {
     a="$a""export TPM2ABRMD_TCTI=\"$TPM2ABRMD_TCTI\"\n"
     a="$a""export TPM2_SIMPORT=\"$TPM2_SIMPORT\"\n"
     a="$a""export TPM2TOOLS_TEST_TCTI=\"$TPM2TOOLS_TEST_TCTI\"\n"
+    a="$a""export TPM2TOOLS_TEST_PERSISTENT=\"$TPM2TOOLS_TEST_PERSISTENT\"\n"
     a="$a""export PATH=\"$PATH\"\n"
     a="$a""TPM2_SIM_NV_CHIP=\"$TPM2_SIM_NV_CHIP\"\n"
     a="$a""TPM2_TOOLS_TEST_FIXTURES=\"$TPM2_TOOLS_TEST_FIXTURES\"\n"
@@ -176,7 +277,7 @@ function start_sim() {
         # just continue up to 10 retries
         # (See : https://github.com/tpm2-software/tpm2-tss/blob/master/src/tss2-tcti/tcti-mssim.c:559)
         if [ -z "$TPM2_SIMPORT" ]; then
-            tpm2_sim_port="$(shuf -i 2321-65534 -n 1)"
+            tpm2_sim_port="$(od -A n -N 2 -t u2 /dev/urandom | awk -v min=2321 -v max=65534 '{print ($1 % (max - min)) + min}')"
         else
             tpm2_sim_port=$TPM2_SIMPORT
         fi
@@ -311,10 +412,10 @@ function start_up() {
     echo "run_startup: $run_startup"
 
     if [ $run_startup = true ]; then
-        tpm2_startup -c
+        tpm2 startup -c
     fi
 
-    if ! tpm2_clear; then
+    if ! tpm2 clear; then
         exit 1
     fi
 }
@@ -403,7 +504,14 @@ function setup_fapi() {
     KEYSTORE_USER=keystore_user
     KEYSTORE_SYSTEM=keystore_system
     LOG_DIR=log
-    PROFILE_NAME=P_RSA
+    PROFILE_NAME_ECC=P_ECCP256SHA256
+    PROFILE_NAME_RSA=P_RSA2048SHA256
+
+    if [ "$1" = "ECC" ]; then
+        PROFILE_NAME=$PROFILE_NAME_ECC
+    else
+        PROFILE_NAME=$PROFILE_NAME_RSA
+    fi
 
     mkdir -p $tempdir/$KEYSTORE_USER/policy $tempdir/$KEYSTORE_SYSTEM/policy \
         $tempdir/$LOG_DIR
@@ -423,10 +531,14 @@ EOF
 
     export TSS2_FAPICONF=$tempdir/fapi_config.json
     export TEMP_DIR=$tempdir
+    dd if=/dev/zero of=$tempdir/big_file.file bs=1M count=10
+    touch $tempdir/empty.file
+
+    SANITIZER_FILTER="*"AddressSanitizer"*"
 
     PATH=${BUILDDIR}/tools/fapi:$PATH
 
-    setup_profile $tempdir
+    setup_profiles $tempdir
     setup_policies $tempdir
     resetPCR16
 
@@ -434,24 +546,18 @@ EOF
 
 # Reset PCR 16. Important when using physical TPM
 function resetPCR16(){
-    tpm2_pcrreset 16
+    tpm2 pcrreset 16
 }
 
-function setup_profile() {
-# Setup Profile
-cat > $tempdir/${PROFILE_NAME}.json <<EOF
+function setup_profiles() {
+# Setup Profiles
+cat > $tempdir/${PROFILE_NAME_RSA}.json <<EOF
 {
     "type": "TPM2_ALG_RSA",
     "nameAlg":"TPM2_ALG_SHA256",
-    "srk_template": "system,restricted,decrypt",
-    "srk_persistent": 0,
+    "srk_template": "system,restricted,decrypt,0x81000001",
+    "srk_persistent": 1,
     "ek_template":  "system,restricted,decrypt",
-    "ecc_signing_scheme": {
-        "scheme":"TPM2_ALG_ECDSA",
-        "details":{
-            "hashAlg":"TPM2_ALG_SHA256"
-        },
-    },
     "rsa_signing_scheme": {
         "scheme":"TPM2_ALG_RSAPSS",
         "details":{
@@ -473,16 +579,74 @@ cat > $tempdir/${PROFILE_NAME}.json <<EOF
     "sym_block_size": 16,
     "pcr_selection": [
         { "hash": "TPM2_ALG_SHA1",
-          "pcrSelect": [ 9, 15, 13 ]
+          "pcrSelect": [ ]
         },
         { "hash": "TPM2_ALG_SHA256",
-          "pcrSelect": [ 8, 16, 14 ]
+          "pcrSelect": [ 8, 9 , 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 ]
         }
     ],
     "exponent": 0,
-    "keyBits": 2048
+    "keyBits": 2048,
+    "session_hash_alg": "TPM2_ALG_SHA256",
+    "session_symmetric":{
+        "algorithm":"TPM2_ALG_AES",
+        "keyBits":"128",
+        "mode":"TPM2_ALG_CFB"
+    },
+    "ek_policy": {
+        "description": "Endorsement hierarchy used for policy secret.",
+        "policy":[
+            {
+                "type":"POLICYSECRET",
+                "objectName": "4000000b",
+            }
+        ]
+    }
+
 }
 EOF
+
+cat > $tempdir/${PROFILE_NAME_ECC}.json <<EOF
+{
+    "type": "TPM2_ALG_ECC",
+    "nameAlg":"TPM2_ALG_SHA256",
+    "srk_template": "system,restricted,decrypt,0x81000001",
+    "srk_persistent": 0,
+    "ek_template":  "system,restricted,decrypt",
+    "ecc_signing_scheme": {
+        "scheme":"TPM2_ALG_ECDSA",
+        "details":{
+            "hashAlg":"TPM2_ALG_SHA256"
+        },
+    },
+    "sym_mode":"TPM2_ALG_CFB",
+    "sym_parameters": {
+        "algorithm":"TPM2_ALG_AES",
+        "keyBits":"128",
+        "mode":"TPM2_ALG_CFB"
+    },
+    "sym_block_size": 16,
+    "pcr_selection": [
+       { "hash": "TPM2_ALG_SHA1",
+         "pcrSelect": [ ],
+       },
+       { "hash": "TPM2_ALG_SHA256",
+         "pcrSelect": [ 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 ]
+       }
+    ],
+    "curveID": "TPM2_ECC_NIST_P256",
+    "ek_policy": {
+        "description": "Endorsement hierarchy used for policy secret.",
+        "policy":[
+            {
+                "type":"POLICYSECRET",
+                "objectName": "4000000b",
+            }
+        ]
+    }
+}
+EOF
+
 }
 
 function setup_policies() {
@@ -557,6 +721,114 @@ cat > $tempdir/pol_pcr16_0.json <<EOF
             ]
         }
     ]
+}
+EOF
+
+# Setup Policy with branch for write and branch for read.
+cat > $tempdir/pol_nv_read_write.json <<EOF
+{
+  "description": "Different policy for NV read and NV write",
+  "policy": [
+             {
+              "type": "or",
+              "branches": [
+                {
+                  "name": "NVWrite",
+                  "description": "For NV Write we want to have PCR16 at 0",
+                  "policy": [
+                    {
+                      "type": "commandCode",
+                      "code": "NV_WRITE"
+                    },
+                    {
+                      "type": "pcr",
+                      "pcrs": [
+                        {
+                          "hashAlg": "sha256",
+                          "pcr": 16,
+                          "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "NVRead",
+                  "description": "For NV Read we don't need any auth",
+                  "policy": [
+                    {
+                      "type": "commandCode",
+                      "code": "NV_READ"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+}
+EOF
+
+# Setup Policy with policy password or branch for write and branch for read.
+cat > $tempdir/pol_pwd_nv_read_write.json <<EOF
+{
+  "description":  "Policy password or different policy for NV read and NV write",
+  "policy": [
+    {
+      "type": "or",
+      "branches": [
+        {
+          "name": "Password",
+          "description": "We can always supply the auth value",
+          "policy": [
+            {
+              "type": "password"
+            }
+          ]
+        },
+        {
+          "name": "NVReadWrite",
+          "description": "For NV Read Write we have a special handling",
+          "policy": [
+            {
+              "type": "or",
+              "branches": [
+                {
+                  "name": "NVWrite",
+                  "description": "For NV Write we want to have PCR16 at 0",
+                  "policy": [
+                    {
+                      "type": "commandCode",
+                      "code": "NV_WRITE"
+                    },
+                    {
+                      "type": "pcr",
+                      "pcrs": [
+                        {
+                          "hashAlg": "sha256",
+                          "pcr": 16,
+                          "digest": "0000000000000000000000000000000000000000000000000000000000000000"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "NVRead",
+                  "description": "For NV Read we don't need any auth",
+                  "policy": [
+                    {
+                      "type": "commandCode",
+                      "code": "NV_READ"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }
 EOF
 

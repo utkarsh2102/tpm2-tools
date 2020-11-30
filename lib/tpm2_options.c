@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <fcntl.h>
 #include <libgen.h>
@@ -107,13 +108,12 @@ bool tpm2_options_cat(tpm2_options **dest, tpm2_options *src) {
 }
 
 void tpm2_options_free(tpm2_options *opts) {
+    if (!opts) {
+        return;
+    }
+
     free(opts->short_opts);
     free(opts);
-}
-
-static inline const char *fixup_name(const char *name) {
-
-    return !strcmp(name, "abrmd") ? "tabrmd" : name;
 }
 
 static bool execute_man(char *prog_name, bool show_errors) {
@@ -127,6 +127,7 @@ static bool execute_man(char *prog_name, bool show_errors) {
         return false;
     }
 
+    #define MAX_TOOL_NAME_LEN 64
     if (pid == 0) {
 
         if (!show_errors) {
@@ -140,10 +141,29 @@ static bool execute_man(char *prog_name, bool show_errors) {
             close(fd);
         }
 
-        char *manpage = basename(prog_name);
-        execlp("man", "man", manpage, NULL);
+        const char *manpage = basename(prog_name);
+        if (!strcmp(manpage, "tpm2")) {
+            /*
+             * Handle the case where tpm2 is specified without tool-name or help
+             */
+            execlp("man", "man", "tpm2", NULL);
+        } else if (strncmp(manpage, "tpm2_", strlen("tpm2_"))) {
+            /*
+             * Handle the case where the tool is specified as tpm2< >tool-name
+             */
+            char man_tool_name[MAX_TOOL_NAME_LEN] = {'t','p','m','2','_'};
+            strncat(man_tool_name, manpage,
+                strlen(manpage) < (MAX_TOOL_NAME_LEN - strlen("tpm2_")) ?
+                    strlen(manpage) : (MAX_TOOL_NAME_LEN - strlen("tpm2_")));
+            execlp("man", "man", man_tool_name, NULL);
+        } else {
+            /*
+             * Handle the case where the tool is specified as tpm2<_>tool-name
+             */
+            execlp("man", "man", manpage, NULL);
+        }
     } else {
-        if ((pid = waitpid(pid, &status, 0)) == -1) {
+        if (waitpid(pid, &status, 0) == -1) {
             LOG_ERR("Waiting for child process that executes man failed, error:"
                     " %s", strerror(errno));
             return false;
@@ -195,8 +215,14 @@ void tpm2_print_usage(const char *command, struct tpm2_options *tool_opts) {
             } else {
                 printf(" ");
             }
-            printf("[ -%c | --%s%s]", opt->val, opt->name,
-                    opt->has_arg ? "=<value>" : "");
+            if (isalpha(opt->val)) {
+                printf("[ -%c | --%s%s]", opt->val, opt->name,
+                        opt->has_arg ? "=<value>" : "");
+            }
+            else {
+                printf("[ --%s%s]", opt->name,
+                        opt->has_arg ? "=<value>" : "");
+            }
             if ((i + 1) % 4 == 0) {
                 printf("\n");
                 indent = true;
@@ -267,17 +293,40 @@ tpm2_option_code tpm2_handle_options(int argc, char **argv,
             break;
         case 'h':
             show_help = true;
-            if (argv[optind]) {
-                if (!strcmp(argv[optind], "man")) {
+            /*
+             * argv[0] = "tool name"
+             * argv[1] = "--help=no/man" argv[2] = 0
+             */
+            if (argv[optind - 1]) {
+                if (!strcmp(argv[optind - 1], "--help=no-man") ||
+                    !strcmp(argv[optind - 1], "-h=no-man") ||
+                    (argv[optind] && !strcmp(argv[optind], "no-man"))) {
+                    manpager = false;
+                    optind++;
+                /*
+                 * argv[0] = "tool name"
+                 * argv[1] = "--help" argv[2] = "no/man"
+                 */
+                } else if (!strcmp(argv[optind - 1], "--help=man") ||
+                           !strcmp(argv[optind - 1], "-h=man") ||
+                           (argv[optind] && !strcmp(argv[optind], "man"))) {
                     manpager = true;
                     explicit_manpager = true;
                     optind++;
-                } else if (!strcmp(argv[optind], "no-man")) {
-                    manpager = false;
-                    optind++;
                 } else {
-                    show_help = false;
-                    LOG_ERR("Unknown help argument, got: \"%s\"", argv[optind]);
+                    /*
+                     * argv[0] = "tool name"
+                     * argv[1] = "--help" argv[2] = 0
+                     */
+                    if (!argv[optind] && argc == 2) {
+                        manpager = false;
+                    } else {
+                        /*
+                         * ERROR
+                         */
+                        show_help = false;
+                        LOG_ERR("Unknown help argument, got: \"%s\"", argv[optind]);
+                    }
                 }
             }
             goto out;

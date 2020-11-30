@@ -108,7 +108,8 @@ tool_rc tpm2_policy_signed(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_entity_obj, ESYS_TR policy_session,
         const TPMT_SIGNATURE *signature, INT32 expiration,
         TPM2B_TIMEOUT **timeout, TPMT_TK_AUTH **policy_ticket,
-        TPM2B_NONCE *policy_qualifier, TPM2B_NONCE *nonce_tpm);
+        TPM2B_NONCE *policy_qualifier, TPM2B_NONCE *nonce_tpm,
+        TPM2B_DIGEST *cphash);
 
 tool_rc tpm2_policy_ticket(ESYS_CONTEXT *esys_context, ESYS_TR policy_session,
     const TPM2B_TIMEOUT *timeout, const TPM2B_NONCE *policyref,
@@ -373,7 +374,8 @@ tool_rc tpm2_pcr_event(ESYS_CONTEXT *ectx, ESYS_TR pcr, tpm2_session *session,
         const TPM2B_EVENT *event_data, TPML_DIGEST_VALUES **digests);
 
 tool_rc tpm2_getrandom(ESYS_CONTEXT *ectx, UINT16 count,
-        TPM2B_DIGEST **random);
+        TPM2B_DIGEST **random, TPM2B_DIGEST *cp_hash, TPM2B_DIGEST *rp_hash,
+        ESYS_TR audit_session_handle, TPMI_ALG_HASH param_hash_algorithm) ;
 
 tool_rc tpm2_startup(ESYS_CONTEXT *ectx, TPM2_SU startup_type);
 
@@ -436,11 +438,53 @@ tool_rc tpm2_gettime(ESYS_CONTEXT *ectx,
         TPMT_SIGNATURE **signature,
         TPM2B_DIGEST *cp_hash);
 
+tool_rc tpm2_setcommandcodeaudit(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *auth_entity_obj, TPMI_ALG_HASH hash_algorithm,
+    const TPML_CC *setlist, const TPML_CC *clearlist);
+
+tool_rc tpm2_getcommandauditdigest(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *privacy_object, tpm2_loaded_object *sign_object,
+        TPMT_SIG_SCHEME *in_scheme, TPM2B_DATA *qualifying_data,
+        TPM2B_ATTEST **audit_info, TPMT_SIGNATURE **signature);
+
+tool_rc tpm2_getsessionauditdigest(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *privacy_object, tpm2_loaded_object *sign_object,
+        TPMT_SIG_SCHEME *in_scheme, TPM2B_DATA *qualifying_data,
+        TPM2B_ATTEST **audit_info, TPMT_SIGNATURE **signature,
+        ESYS_TR audit_session_handle);
+
+tool_rc tpm2_geteccparameters(ESYS_CONTEXT *esys_context,
+    TPMI_ECC_CURVE curve_id, TPMS_ALGORITHM_DETAIL_ECC **parameters);
+
+tool_rc tpm2_ecephemeral(ESYS_CONTEXT *esys_context, TPMI_ECC_CURVE curve_id,
+    TPM2B_ECC_POINT **Q, uint16_t *counter);
+
+tool_rc tpm2_commit(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *signing_key_object, TPM2B_ECC_POINT *P1,
+    TPM2B_SENSITIVE_DATA *s2, TPM2B_ECC_PARAMETER *y2, TPM2B_ECC_POINT **K,
+    TPM2B_ECC_POINT **L, TPM2B_ECC_POINT **E, uint16_t *counter);
+
+tool_rc tpm2_ecdhkeygen(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *ecc_public_key, TPM2B_ECC_POINT **Z,
+    TPM2B_ECC_POINT **Q);
+
+tool_rc tpm2_ecdhzgen(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *ecc_key_object, TPM2B_ECC_POINT **Z,
+    TPM2B_ECC_POINT *Q);
+
+tool_rc tpm2_zgen2phase(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *ecc_key_object, TPM2B_ECC_POINT *Q1,
+    TPM2B_ECC_POINT *Q2, TPM2B_ECC_POINT **Z1, TPM2B_ECC_POINT **Z2,
+    TPMI_ECC_KEY_EXCHANGE keyexchange_scheme, UINT16 commit_counter);
+
 tool_rc tpm2_getsapicontext(ESYS_CONTEXT *esys_context,
     TSS2_SYS_CONTEXT **sys_context);
 
 tool_rc tpm2_sapi_getcphash(TSS2_SYS_CONTEXT *sys_context,
     const TPM2B_NAME *name1, const TPM2B_NAME *name2, const TPM2B_NAME *name3,
     TPMI_ALG_HASH halg, TPM2B_DIGEST *cp_hash);
+
+tool_rc tpm2_sapi_getrphash(TSS2_SYS_CONTEXT *sys_context,
+    TSS2_RC response_code, TPM2B_DIGEST *rp_hash, TPMI_ALG_HASH halg);
 
 #endif /* LIB_TPM2_H_ */

@@ -6,9 +6,6 @@
 #include <string.h>
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed command line parameters */
 static struct cxt {
     char const *path;
@@ -41,7 +38,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"force"   , no_argument      , NULL, 'f'},
         {"path"    , required_argument, NULL, 'p'},
@@ -54,7 +51,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
     if (!ctx.path) {
         fprintf (stderr, "path missing, use --path\n");
@@ -90,7 +87,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.tpm2bPublic, ctx.overwrite, tpm2bPublic,
             tpm2bPublicSize);
         if (r) {
-            LOG_PERR ("open_write_and_close tpm2bPublic", r);
             Fapi_Free (tpm2bPublic);
             return 1;
         }
@@ -100,7 +96,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.tpm2bPrivate, ctx.overwrite, tpm2bPrivate,
             tpm2bPrivateSize);
         if (r) {
-            LOG_PERR ("open_write_and_close tpm2bPrivate", r);
             Fapi_Free (tpm2bPublic);
             Fapi_Free (tpm2bPrivate);
             return 1;
@@ -111,7 +106,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.policy, ctx.overwrite, policy,
             strlen(policy));
         if (r) {
-            LOG_PERR ("open_write_and_close policy", r);
             Fapi_Free (tpm2bPublic);
             Fapi_Free (tpm2bPrivate);
             Fapi_Free (policy);
@@ -119,9 +113,11 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         }
     }
 
-    Fapi_Free (policy);
     Fapi_Free (tpm2bPublic);
     Fapi_Free (tpm2bPrivate);
+    Fapi_Free (policy);
 
     return 0;
 }
+
+TSS2_TOOL_REGISTER("gettpmblobs", tss2_tool_onstart, tss2_tool_onrun, NULL)

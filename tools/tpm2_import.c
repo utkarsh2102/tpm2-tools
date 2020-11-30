@@ -30,7 +30,9 @@
 #include "files.h"
 #include "log.h"
 #include "tpm2.h"
+#include "tpm2_tool.h"
 #include "tpm2_alg_util.h"
+#include "tpm2_attr_util.h"
 #include "tpm2_auth_util.h"
 #include "tpm2_errata.h"
 #include "tpm2_identity_util.h"
@@ -265,7 +267,7 @@ static bool on_option(char key, char *value) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     const struct option topts[] = {
       { "parent-auth",        required_argument, NULL, 'P'},
@@ -429,7 +431,7 @@ static tool_rc openssl_import(ESYS_CONTEXT *ectx) {
      */
     if (ctx.attrs) {
         TPMA_OBJECT *obj_attrs = &public.publicArea.objectAttributes;
-        result = tpm2_util_string_to_uint32(ctx.attrs, obj_attrs);
+        result = tpm2_attr_util_obj_from_optarg(ctx.attrs, obj_attrs);
         if (!result) {
             LOG_ERR("Invalid object attribute, got\"%s\"", ctx.attrs);
             return tool_rc_general_error;
@@ -662,7 +664,7 @@ static tool_rc tpm_import(ESYS_CONTEXT *ectx) {
 
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     UNUSED(flags);
 
     tool_rc rc = check_options();
@@ -681,7 +683,7 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     return ctx.import_tpm ? tpm_import(ectx) : openssl_import(ectx);
 }
 
-tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
+static tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
     UNUSED(ectx);
 
     if (!ctx.import_tpm) {
@@ -690,3 +692,6 @@ tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
 
     return tpm2_session_close(&ctx.parent.object.session);
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("import", tpm2_tool_onstart, tpm2_tool_onrun, tpm2_tool_onstop, NULL)

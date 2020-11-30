@@ -84,7 +84,7 @@ void bytes_to_str(uint8_t const *buf, size_t size, char *dest, size_t dest_size)
 
     size_t i, j;
 
-    for(i = 0, j = 0; i < size && j < dest_size - 1; ++i, j+=2) {
+    for(i = 0, j = 0; i < size && j < dest_size - 2; ++i, j+=2) {
         sprintf(&dest[j], "%02x", buf[i]);
     }
     dest[j] = '\0';
@@ -93,10 +93,23 @@ void yaml_event2hdr(TCG_EVENT_HEADER2 const *eventhdr, size_t size) {
 
     (void)size;
 
-    tpm2_tool_output("  PCRIndex: %d\n", eventhdr->PCRIndex);
-    tpm2_tool_output("  EventType: %s\n",
-           eventtype_to_string(eventhdr->EventType));
-    tpm2_tool_output("  DigestCount: %d\n", eventhdr->DigestCount);
+    tpm2_tool_output("    PCRIndex: %d\n"
+                     "    EventType: %s\n"
+                     "    DigestCount: %d\n",
+                     eventhdr->PCRIndex,
+                     eventtype_to_string(eventhdr->EventType),
+                     eventhdr->DigestCount);
+
+    return;
+}
+void yaml_sha1_log_eventhdr(TCG_EVENT const *eventhdr, size_t size) {
+
+    (void)size;
+
+    tpm2_tool_output("    PCRIndex: %d\n"
+                     "    EventType: %s\n",
+                     eventhdr->pcrIndex,
+                     eventtype_to_string(eventhdr->eventType));
 
     return;
 }
@@ -106,12 +119,12 @@ void yaml_event2hdr(TCG_EVENT_HEADER2 const *eventhdr, size_t size) {
 bool yaml_digest2(TCG_DIGEST2 const *digest, size_t size) {
 
     char hexstr[DIGEST_HEX_STRING_MAX] = { 0, };
-
-    tpm2_tool_output("    - AlgorithmId: %s\n",
-           tpm2_alg_util_algtostr(digest->AlgorithmId,
-                                  tpm2_alg_util_flags_hash));
     bytes_to_str(digest->Digest, size, hexstr, sizeof(hexstr));
-    tpm2_tool_output("      Digest: %s\n", hexstr);
+
+    tpm2_tool_output("      - AlgorithmId: %s\n"
+                     "        Digest: \"%s\"\n",
+                     tpm2_alg_util_algtostr(digest->AlgorithmId, tpm2_alg_util_flags_hash),
+                     hexstr);
 
     return true;
 }
@@ -119,7 +132,9 @@ bool yaml_uefi_var_unicodename(UEFI_VARIABLE_DATA *data) {
 
     int ret = 0;
     char *mbstr = NULL, *tmp = NULL;
-    mbstate_t st = { 0, };
+    mbstate_t st;
+
+    memset(&st, '\0', sizeof(st));
 
     mbstr = tmp = calloc(data->UnicodeNameLength + 1, MB_CUR_MAX);
     if (mbstr == NULL) {
@@ -157,9 +172,32 @@ static bool yaml_uefi_var_data(UEFI_VARIABLE_DATA *data) {
     bytes_to_str(variable_data, data->VariableDataLength, var_data,
                  VAR_DATA_HEX_SIZE(data));
 
-    tpm2_tool_output("      VariableData: %s\n", var_data);
+    tpm2_tool_output("      VariableData: \"%s\"\n", var_data);
     free(var_data);
 
+    return true;
+}
+/*
+ * TCG PC Client FPF section 2.3.4.1 and 9.4.1:
+ * Usage of the event type EV_POST_CODE:
+ * - If a combined event is measured, the event field SHOULD
+ * be the string "POST CODE" in all caps. ...
+ * - Embedded SMM code and the code that sets it up SHOULD use
+ * the string "SMM CODE" in all caps...
+ * - BIS code (excluding the BIS Certificate) should use event
+ * field string of "BIS CODE" in all caps. ...
+ * - ACPI flash data prior to any modifications ... should use
+ * event field string of "ACPI DATA" in all caps.
+ */
+static bool yaml_uefi_post_code(const TCG_EVENT2 * const event)
+{
+    const char * const data = (const char *) event->Event;
+    const size_t len = event->EventSize;
+
+    tpm2_tool_output(
+        "    Event: '%.*s'\n",
+        (int) len,
+        data);
     return true;
 }
 /*
@@ -172,10 +210,12 @@ static bool yaml_uefi_var(UEFI_VARIABLE_DATA *data) {
     bool ret;
     char uuidstr[37] = { 0 };
 
-    tpm2_tool_output("  Event:\n");
     uuid_unparse_lower(data->VariableName, uuidstr);
-    tpm2_tool_output("    - VariableName: %s\n      UnicodeNameLength: %"
-                     PRIu64 "\n      VariableDataLength: %" PRIu64 "\n",
+
+    tpm2_tool_output("    Event:\n"
+                     "      VariableName: %s\n"
+                     "      UnicodeNameLength: %"PRIu64"\n"
+                     "      VariableDataLength: %" PRIu64 "\n",
                      uuidstr, data->UnicodeNameLength,
                      data->VariableDataLength);
 
@@ -189,19 +229,17 @@ static bool yaml_uefi_var(UEFI_VARIABLE_DATA *data) {
 /* TCG PC Client FPF section 9.2.5 */
 bool yaml_uefi_platfwblob(UEFI_PLATFORM_FIRMWARE_BLOB *data) {
 
-    tpm2_tool_output("  Event:\n    - BlobBase: 0x%" PRIx64 "\n      "
-                     "BlobLength: 0x%" PRIx64 "\n", data->BlobBase,
+    tpm2_tool_output("    Event:\n"
+                     "      BlobBase: 0x%" PRIx64 "\n"
+                     "      BlobLength: 0x%" PRIx64 "\n",
+                     data->BlobBase,
                      data->BlobLength);
     return true;
 }
 /* TCG PC Client PFP section 9.4.4 */
 bool yaml_uefi_action(UINT8 const *action, size_t size) {
 
-    /* longest string permitted by spec is 47 chars */
-    char buf[50] = { '\0', };
-
-    memcpy (buf, action, size);
-    tpm2_tool_output("  Event: %s\n", buf);
+    tpm2_tool_output("    Event: '%.*s'\n", (int) size, action);
 
     return true;
 }
@@ -215,15 +253,16 @@ bool yaml_uefi_image_load(UEFI_IMAGE_LOAD_EVENT *data, size_t size) {
         return false;
     }
 
-    tpm2_tool_output("  Event:\n    - ImageLocationInMemory: 0x%" PRIx64 "\n"
-                     "      ImageLengthInMemory: %" PRIu64 "\n      "
-                     "ImageLinkTimeAddress: 0x%" PRIx64 "\n      "
-                     "LengthOfDevicePath: %" PRIu64 "\n",
+    tpm2_tool_output("    Event:\n"
+                     "      ImageLocationInMemory: 0x%" PRIx64 "\n"
+                     "      ImageLengthInMemory: %" PRIu64 "\n"
+                     "      ImageLinkTimeAddress: 0x%" PRIx64 "\n"
+                     "      LengthOfDevicePath: %" PRIu64 "\n",
                      data->ImageLocationInMemory, data->ImageLengthInMemory,
                      data->ImageLinkTimeAddress, data->LengthOfDevicePath);
 
     bytes_to_str(data->DevicePath, size - sizeof(*data), buf, devpath_len);
-    tpm2_tool_output("      DevicePath: %s\n", buf);
+    tpm2_tool_output("      DevicePath: \"%s\"\n", buf);
 
     free(buf);
     return true;
@@ -233,7 +272,7 @@ bool yaml_event2data(TCG_EVENT2 const *event, UINT32 type) {
 
     char hexstr[EVENT_BUF_MAX] = { 0, };
 
-    tpm2_tool_output("  EventSize: %" PRIu32 "\n", event->EventSize);
+    tpm2_tool_output("    EventSize: %" PRIu32 "\n", event->EventSize);
 
     if (event->EventSize == 0) {
         return true;
@@ -245,6 +284,7 @@ bool yaml_event2data(TCG_EVENT2 const *event, UINT32 type) {
     case EV_EFI_VARIABLE_AUTHORITY:
         return yaml_uefi_var((UEFI_VARIABLE_DATA*)event->Event);
     case EV_POST_CODE:
+        return yaml_uefi_post_code(event);
     case EV_S_CRTM_CONTENTS:
     case EV_EFI_PLATFORM_FIRMWARE_BLOB:
         return yaml_uefi_platfwblob((UEFI_PLATFORM_FIRMWARE_BLOB*)event->Event);
@@ -257,7 +297,7 @@ bool yaml_event2data(TCG_EVENT2 const *event, UINT32 type) {
                                     event->EventSize);
     default:
         bytes_to_str(event->Event, event->EventSize, hexstr, sizeof(hexstr));
-        tpm2_tool_output("  Event: %s\n", hexstr);
+        tpm2_tool_output("    Event: \"%s\"\n", hexstr);
         return true;
     }
 }
@@ -285,25 +325,44 @@ bool yaml_event2hdr_callback(TCG_EVENT_HEADER2 const *eventhdr, size_t size,
         return false;
     }
 
-    tpm2_tool_output("- Event[%zu]:\n", *count++);
+    tpm2_tool_output("  - EventNum: %zu\n", (*count)++);
 
     yaml_event2hdr(eventhdr, size);
 
-    tpm2_tool_output("  Digests:\n");
+    tpm2_tool_output("    Digests:\n");
 
+    return true;
+}
+bool yaml_sha1_log_eventhdr_callback(TCG_EVENT const *eventhdr, size_t size,
+                                     void *data_in) {
+
+    (void)data_in;
+
+    yaml_sha1_log_eventhdr(eventhdr, size);
+
+    char hexstr[BYTES_TO_HEX_STRING_SIZE(sizeof(eventhdr->digest))] = { 0, };
+    bytes_to_str(eventhdr->digest, sizeof(eventhdr->digest), hexstr, sizeof(hexstr));
+
+    tpm2_tool_output("    DigestCount: 1\n"
+                     "    Digests:\n"
+                     "      - AlgorithmId: %s\n"
+                     "        Digest: \"%s\"\n",
+                     tpm2_alg_util_algtostr(TPM2_ALG_SHA1, tpm2_alg_util_flags_hash),
+                     hexstr);
     return true;
 }
 void yaml_eventhdr(TCG_EVENT const *event, size_t *count) {
 
     /* digest is 20 bytes, 2 chars / byte and null terminator for string*/
-    char digest_hex[41] = { '\0', };
+    char digest_hex[2*sizeof(event->digest) + 1] = {};
     bytes_to_str(event->digest, sizeof(event->digest), digest_hex, sizeof(digest_hex));
 
-    tpm2_tool_output("- Event[%zu]:\n"
-                     "  pcrIndex: %" PRIu32 "\n"
-                     "  eventType: %s\n"
-                     "  digest: %s\n"
-                     "  eventDataSize: %" PRIu32 "\n", (*count)++, event->pcrIndex,
+    tpm2_tool_output("  - EventNum: %zu\n"
+                     "    PCRIndex: %" PRIu32 "\n"
+                     "    EventType: %s\n"
+                     "    Digest: \"%s\"\n"
+                     "    EventSize: %" PRIu32 "\n",
+                     (*count)++, event->pcrIndex,
                      eventtype_to_string(event->eventType), digest_hex,
                      event->eventDataSize);
 }
@@ -314,15 +373,15 @@ void yaml_specid(TCG_SPECID_EVENT* specid) {
     char sig_str[sizeof(specid->Signature) + 1] = { '\0', };
     memcpy(sig_str, specid->Signature, sizeof(specid->Signature));
 
-    tpm2_tool_output("  SpecID:\n"
-                     "    - Signature: %s\n"
-                     "      platformClass: %" PRIu32 "\n"
-                     "      specVersionMinor: %" PRIu8 "\n"
-                     "      specVersionMajor: %" PRIu8 "\n"
-                     "      specErrata: %" PRIu8 "\n"
-                     "      uintnSize: %" PRIu8 "\n"
-                     "      numberOfAlgorithms: %" PRIu32 "\n"
-                     "      Algorithms:\n",
+    tpm2_tool_output("    SpecID:\n"
+                     "      - Signature: %s\n"
+                     "        platformClass: %" PRIu32 "\n"
+                     "        specVersionMinor: %" PRIu8 "\n"
+                     "        specVersionMajor: %" PRIu8 "\n"
+                     "        specErrata: %" PRIu8 "\n"
+                     "        uintnSize: %" PRIu8 "\n"
+                     "        numberOfAlgorithms: %" PRIu32 "\n"
+                     "        Algorithms:\n",
                      sig_str,
                      specid->platformClass, specid->specVersionMinor,
                      specid->specVersionMajor, specid->specErrata,
@@ -333,9 +392,9 @@ void yaml_specid(TCG_SPECID_EVENT* specid) {
 void yaml_specid_algs(TCG_SPECID_ALG const *alg, size_t count) {
 
     for (size_t i = 0; i < count; ++i, ++alg) {
-        tpm2_tool_output("        - Algorithm[%zu]:\n"
-                         "          algorithmId: %s\n"
-                         "          digestSize: %" PRIu16 "\n",
+        tpm2_tool_output("          - Algorithm[%zu]:\n"
+                         "            algorithmId: %s\n"
+                         "            digestSize: %" PRIu16 "\n",
                          i,
                          tpm2_alg_util_algtostr(alg->algorithmId,
                                                 tpm2_alg_util_flags_hash),
@@ -346,7 +405,7 @@ bool yaml_specid_vendor(TCG_VENDOR_INFO *vendor) {
 
     char *vendinfo_str;
 
-    tpm2_tool_output("      vendorInfoSize: %" PRIu8 "\n", vendor->vendorInfoSize);
+    tpm2_tool_output("        vendorInfoSize: %" PRIu8 "\n", vendor->vendorInfoSize);
     if (vendor->vendorInfoSize == 0) {
         return true;
     }
@@ -358,7 +417,7 @@ bool yaml_specid_vendor(TCG_VENDOR_INFO *vendor) {
     }
     bytes_to_str(vendor->vendorInfo, vendor->vendorInfoSize, vendinfo_str,
                  vendor->vendorInfoSize * 2 + 1);
-    tpm2_tool_output("      vendorInfo: %s\n", vendinfo_str);
+    tpm2_tool_output("        vendorInfo: \"%s\"\n", vendinfo_str);
     free(vendinfo_str);
     return true;
 }
@@ -379,14 +438,87 @@ bool yaml_specid_callback(TCG_EVENT const *event, void *data) {
     return yaml_specid_event(event, count);
 }
 
+static void yaml_eventlog_pcrs(tpm2_eventlog_context *ctx) {
+
+    char hexstr[DIGEST_HEX_STRING_MAX] = { 0, };
+
+    tpm2_tool_output("pcrs:\n");
+
+    if (ctx->sha1_used != 0) {
+        tpm2_tool_output("  sha1:\n");
+        for(unsigned i = 0 ; i < TPM2_MAX_PCRS ; i++) {
+            if ((ctx->sha1_used & (1 << i)) == 0)
+                continue;
+            bytes_to_str(ctx->sha1_pcrs[i], sizeof(ctx->sha1_pcrs[i]),
+                hexstr, sizeof(hexstr));
+            tpm2_tool_output("    %-2d : 0x%s\n", i, hexstr);
+        }
+    }
+
+    if (ctx->sha256_used != 0) {
+        tpm2_tool_output("  sha256:\n");
+        for(unsigned i = 0 ; i < TPM2_MAX_PCRS ; i++) {
+            if ((ctx->sha256_used & (1 << i)) == 0)
+                continue;
+            bytes_to_str(ctx->sha256_pcrs[i], sizeof(ctx->sha256_pcrs[i]),
+                hexstr, sizeof(hexstr));
+            tpm2_tool_output("    %-2d : 0x%s\n", i, hexstr);
+        }
+    }
+
+    if (ctx->sha384_used != 0) {
+        tpm2_tool_output("  sha384:\n");
+        for(unsigned i = 0 ; i < TPM2_MAX_PCRS ; i++) {
+            if ((ctx->sha384_used & (1 << i)) == 0)
+                continue;
+            bytes_to_str(ctx->sha384_pcrs[i], sizeof(ctx->sha384_pcrs[i]),
+                hexstr, sizeof(hexstr));
+            tpm2_tool_output("    %-2d : 0x%s\n", i, hexstr);
+        }
+    }
+
+    if (ctx->sha512_used != 0) {
+        tpm2_tool_output("  sha512:\n");
+        for(unsigned i = 0 ; i < TPM2_MAX_PCRS ; i++) {
+            if ((ctx->sha512_used & (1 << i)) == 0)
+                continue;
+            bytes_to_str(ctx->sha512_pcrs[i], sizeof(ctx->sha512_pcrs[i]),
+                hexstr, sizeof(hexstr));
+            tpm2_tool_output("    %-2d : 0x%s\n", i, hexstr);
+        }
+    }
+
+    if (ctx->sm3_256_used != 0) {
+        tpm2_tool_output("  sm3_256:\n");
+        for(unsigned i = 0 ; i < TPM2_MAX_PCRS ; i++) {
+            if ((ctx->sm3_256_used & (1 << i)) == 0)
+                continue;
+            bytes_to_str(ctx->sm3_256_pcrs[i], sizeof(ctx->sm3_256_pcrs[i]),
+                hexstr, sizeof(hexstr));
+            tpm2_tool_output("    %-2d : 0x%s\n", i, hexstr);
+        }
+    }
+}
+
 bool yaml_eventlog(UINT8 const *eventlog, size_t size) {
 
     size_t count = 0;
+    tpm2_eventlog_context ctx = {
+        .data = &count,
+        .specid_cb = yaml_specid_callback,
+        .event2hdr_cb = yaml_event2hdr_callback,
+        .log_eventhdr_cb = yaml_sha1_log_eventhdr_callback,
+        .digest2_cb = yaml_digest2_callback,
+        .event2_cb = yaml_event2data_callback,
+    };
 
     tpm2_tool_output("---\n");
-    return parse_eventlog(eventlog, size,
-                          yaml_specid_callback,
-                          yaml_event2hdr_callback,
-                          yaml_digest2_callback,
-                          yaml_event2data_callback, &count);
+    tpm2_tool_output("events:\n");
+    bool rc = parse_eventlog(&ctx, eventlog, size);
+    if (!rc) {
+        return rc;
+    }
+
+    yaml_eventlog_pcrs(&ctx);
+    return true;
 }

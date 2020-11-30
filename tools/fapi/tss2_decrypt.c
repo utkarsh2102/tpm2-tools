@@ -5,9 +5,6 @@
 #include <stdio.h>
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed command line parameters */
 static struct cxt {
     char const *keyPath;
@@ -36,7 +33,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"keyPath",     required_argument, NULL, 'p'},
         {"cipherText", required_argument, NULL, 'i'},
@@ -48,7 +45,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
     if (!ctx.keyPath) {
         fprintf (stderr, "No key path provided, use --keyPath\n");
@@ -69,8 +66,7 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     TSS2_RC r = open_read_and_close (ctx.cipherText, (void**)&cipherText,
         &cipherTextSize);
     if (r){
-        LOG_PERR ("open_read_and_close cipherText", r);
-        return r;
+        return 1;
     }
 
     /* Execute FAPI command with passed arguments */
@@ -89,11 +85,12 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     r = open_write_and_close (ctx.plainText, ctx.overwrite, plainText,
         plainTextSize);
     if (r){
-        LOG_PERR ("open_write_and_close plainText", r);
         Fapi_Free (plainText);
-        return r;
+        return 1;
     }
 
     Fapi_Free (plainText);
-    return r;
+    return 0;
 }
+
+TSS2_TOOL_REGISTER("decrypt", tss2_tool_onstart, tss2_tool_onrun, NULL)

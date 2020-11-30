@@ -1,22 +1,20 @@
-#!/bin/bash
 
 set -e
 source helpers.sh
 
 start_up
 
-setup_fapi
+CRYPTO_PROFILE="RSA"
+setup_fapi $CRYPTO_PROFILE
 
 function cleanup {
-    tss2_delete --path /
+    tss2 delete --path=/
     shut_down
 }
 
 trap cleanup EXIT
 
 KEY_PATH=HS/SRK/myRSACrypt
-# cat > $tempdir/fapi_config.json <<EOF
-
 READ_CERTIFICATE_FILE=$TEMP_DIR/read_certificate.file
 WRITE_CERTIFICATE_FILE=$TEMP_DIR/write_certificate.file
 
@@ -42,25 +40,33 @@ cat > $WRITE_CERTIFICATE_FILE <<EOF
     -----END CERTIFICATE-----\n"
 EOF
 
-tss2_provision
+EMPTY_FILE=$TEMP_DIR/empty.file
+BIG_FILE=$TEMP_DIR/big_file.file
 
-tss2_createkey --path $KEY_PATH --type "noDa, restricted, decrypt" \
-    --authValue ""
+tss2 provision
 
-tss2_setcertificate --path $KEY_PATH --x509certData $WRITE_CERTIFICATE_FILE
+tss2 createkey --path=$KEY_PATH --type="noDa, restricted, decrypt" \
+    --authValue=""
 
-tss2_getcertificate --path $KEY_PATH --x509certData $READ_CERTIFICATE_FILE \
+echo "tss2 setcertificate with EMPTY_FILE" # Expected to succeed
+tss2 setcertificate --path=$KEY_PATH --x509certData=$EMPTY_FILE
+
+echo "tss2 setcertificate with BIG_FILE" # Expected to succeed
+tss2 setcertificate --path=$KEY_PATH --x509certData=$BIG_FILE
+
+tss2 setcertificate --path=$KEY_PATH --x509certData=$WRITE_CERTIFICATE_FILE
+
+tss2 getcertificate --path=$KEY_PATH --x509certData=$READ_CERTIFICATE_FILE \
     --force
 
-if [ ! cmp -s "$WRITE_CERTIFICATE_FILE" "$READ_CERTIFICATE_FILE" ]; then
+if [[ "$(< $READ_CERTIFICATE_FILE)" != "$(< $WRITE_CERTIFICATE_FILE)" ]]; then
   echo "Certificates not equal"
   exit 1
 fi
 
 expect <<EOF
 # Try with missing path
-spawn tss2_setcertificate \
-    --x509certData $WRITE_CERTIFICATE_FILE
+spawn tss2 setcertificate --x509certData=$WRITE_CERTIFICATE_FILE
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"
@@ -68,9 +74,19 @@ if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
 }
 EOF
 
+# Try with missing cert, should set cert to empty
+tss2 setcertificate --path=$KEY_PATH
+tss2 getcertificate --path=$KEY_PATH --x509certData=$READ_CERTIFICATE_FILE \
+    --force
+
+if [[ "$(< $READ_CERTIFICATE_FILE)" != "" ]]; then
+  echo "Certificate was not deleted"
+  exit 1
+fi
+
 expect <<EOF
 # Try with missing path
-spawn tss2_getcertificate --x509certData $READ_CERTIFICATE_FILE --force
+spawn tss2 getcertificate --x509certData=$READ_CERTIFICATE_FILE --force
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"
@@ -80,7 +96,7 @@ EOF
 
 expect <<EOF
 # Try with missing x509certData
-spawn tss2_getcertificate --path $KEY_PATH --force
+spawn tss2 getcertificate --path=$KEY_PATH --force
 set ret [wait]
 if {[lindex \$ret 2] || [lindex \$ret 3] != 1} {
     Command has not failed as expected\n"

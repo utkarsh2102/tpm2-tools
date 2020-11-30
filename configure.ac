@@ -106,6 +106,11 @@ AC_ARG_ENABLE([unit],
             [enable_unit=no])
 AM_CONDITIONAL([UNIT], [test "x$enable_unit" != xno])
 
+AC_ARG_ENABLE([persistent],
+            [AS_HELP_STRING([--disable-persistent],
+                            [disable tests that require resetting the TPM])],,)
+AM_CONDITIONAL([PERSISTENT], [test "x$enable_persistent" != xno])
+
 dnl macro that checks for specific modules in python
 AC_DEFUN([AC_PYTHON_MODULE],
 [AC_MSG_CHECKING([for module $1 in python])
@@ -117,46 +122,62 @@ AC_DEFUN([AC_PYTHON_MODULE],
   fi
 ])
 
+# Check OS and set library and compile flags accordingly
+case "${host_os}" in
+    *bsd* | *BSD*)
+        HOSTOS='BSD'
+        ;;
+    *)
+        #Assume linux
+        HOSTOS='Linux'
+        ;;
+esac
+
 AS_IF([test "x$enable_unit" != xno], [
     PKG_CHECK_MODULES([CMOCKA],[cmocka])
 
     AC_CHECK_PROG([tpm2_abrmd], [tpm2-abrmd], yes, no)
-    AS_IF([test $tpm2_abrmd = missing],
+    AS_IF([test $tpm2_abrmd = no],
           [AC_MSG_ERROR([Required executable tpm2_abrmd not found, try setting PATH])])
 
     AC_CHECK_PROG([tpm_server], [tpm_server], yes, no)
-    AS_IF([test $tpm_server = missing],
+    AS_IF([test $tpm_server = no],
           [AC_MSG_ERROR([Required executable tpm_server not found, try setting PATH])])
 
     AC_CHECK_PROG([BASH_SHELL], [bash], yes, no)
-    AS_IF([test $BASH_SHELL = missing],
+    AS_IF([test $BASH_SHELL = no],
           [AC_MSG_ERROR([Required executable bash not found, system tests require a bash shell!])])
 
     AC_CHECK_PROG([PYTHON], [python], yes, no)
-    AS_IF([test $PYTHON = missing],
+    AS_IF([test $PYTHON = no],
           [AC_MSG_ERROR([Required executable python not found, some system tests will fail!])])
 
     AC_PYTHON_MODULE([yaml])
 
     AC_CHECK_PROG([XXD], [xxd], yes, no)
-    AS_IF([test $XXD = missing],
+    AS_IF([test $XXD = no],
           [AC_MSG_ERROR([Required executable xxd not found, some system tests will fail!])])
-
-    AC_CHECK_PROG([SS], [ss], yes, no)
-    AS_IF([test $SS = missing],
-          [AC_MSG_ERROR([Required executable ss not found, some system tests will fail!])])
+    AS_IF([test "$HOSTOS" = "Linux"],
+           [AC_CHECK_PROG([SS], [ss], [yes], [no])],
+           [AC_CHECK_PROG([SS], [sockstat], [yes], [no])])
+    AS_IF([test $SS = no],
+          [AC_MSG_ERROR([Required executable ss/sockstat not found, some system tests will fail!])])
 
     AC_CHECK_PROG([SHASUM], [shasum], yes, no)
-    AS_IF([test $SHASUM = missing],
+    AS_IF([test $SHASUM = no],
           [AC_MSG_ERROR([Required executable shasum not found, some system tests will fail!])])
 
     AC_CHECK_PROG([MKTEMP], [mktemp], yes, no)
-    AS_IF([test $MKTEMP = missing],
+    AS_IF([test $MKTEMP = no],
           [AC_MSG_ERROR([Required executable mktemp not found, some system tests will fail!])])
 
     AC_CHECK_PROG([EXPECT], [expect], yes, no)
-    AS_IF([test $EXPECT = missing],
+    AS_IF([test $EXPECT = no],
           [AC_MSG_ERROR([Required executable expect not found, some system tests will fail!])])
+
+    AC_CHECK_PROG([OPENSSL], [openssl], yes, no)
+    AS_IF([test $OPENSSL = no],
+          [AC_MSG_ERROR([Required executable openssl not found, some system tests will fail!])])
 
     unit_test_tool_report="- tpm2_abrmd: $tpm2_abrmd
     - tpm_server: $tpm_server
@@ -166,7 +187,8 @@ AS_IF([test "x$enable_unit" != xno], [
     - ss: $SS
     - shasum: $SHASUM
     - mktemp: $MKTEMP
-    - expect: $EXPECT"
+    - expect: $EXPECT
+    - openssl: $OPENSSL"
 ])
 
 AC_ARG_ENABLE([dlclose],
@@ -217,7 +239,6 @@ AS_IF([test x"$enable_hardening" != x"no"], [
   add_hardened_c_flag([-Wstack-protector])
   add_hardened_c_flag([-fstack-protector-all])
   add_hardened_c_flag([-Wstrict-overflow=5])
-  add_hardened_c_flag([-Wbool-compare])
 
   add_hardened_c_flag([-O2])
   AX_ADD_FORTIFY_SOURCE
@@ -248,11 +269,14 @@ AC_DEFUN([add_c_flag], [
 add_c_flag([-D_GNU_SOURCE], [AC_MSG_ERROR([Cannot enable -D_GNU_SOURCE])])
 
 # Best attempt compiler options that are on newer versions of GCC that
-# we can't widely enforce without killing other peoples builds
-add_c_flag([-Wstringop-overflow=4])
-add_c_flag([-Wstringop-truncation])
-add_c_flag([-Wduplicated-branches])
-add_c_flag([-Wduplicated-cond])
+# we can't widely enforce without killing other peoples builds.
+# Works with gcc only. Needs to be disabled on BSD and clang
+AS_IF([test "$HOSTOS" = "Linux"],
+      [add_c_flag([-Wstringop-overflow=4])
+       add_c_flag([-Wstringop-truncation])
+       add_c_flag([-Wduplicated-branches])
+       add_c_flag([-Wduplicated-cond])
+       add_hardened_c_flag([-Wbool-compare])],[])
 
 # Best attempt, strip unused stuff from the binary to reduce size.
 # Rather than nesting these and making them ugly just use a counter.

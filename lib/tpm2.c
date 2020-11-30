@@ -11,6 +11,7 @@
 #include "tpm2_alg_util.h"
 #include "tpm2_auth_util.h"
 #include "tpm2_openssl.h"
+#include "tpm2_session.h"
 #include "tpm2_tool.h"
 #include "config.h"
 
@@ -453,11 +454,12 @@ tool_rc tpm2_policy_signed(ESYS_CONTEXT *esys_context,
         tpm2_loaded_object *auth_entity_obj, ESYS_TR policy_session,
         const TPMT_SIGNATURE *signature, INT32 expiration,
         TPM2B_TIMEOUT **timeout, TPMT_TK_AUTH **policy_ticket,
-        TPM2B_NONCE *policy_qualifier, TPM2B_NONCE *nonce_tpm) {
+        TPM2B_NONCE *policy_qualifier, TPM2B_NONCE *nonce_tpm,
+        TPM2B_DIGEST *cphash) {
 
     TSS2_RC rval = Esys_PolicySigned(esys_context, auth_entity_obj->tr_handle,
         policy_session, ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, nonce_tpm,
-        NULL, policy_qualifier, expiration, signature, timeout, policy_ticket);
+        cphash, policy_qualifier, expiration, signature, timeout, policy_ticket);
     if (rval != TSS2_RC_SUCCESS) {
         LOG_PERR(Esys_PolicySigned, rval);
         return tool_rc_from_tpm(rval);
@@ -690,7 +692,7 @@ tool_rc tpm2_policy_secret(ESYS_CONTEXT *esys_context,
         TPM2B_TIMEOUT **timeout, TPM2B_NONCE *nonce_tpm,
         TPM2B_NONCE *policy_qualifier, TPM2B_DIGEST *cp_hash) {
 
-    const TPM2B_DIGEST *cp_hash_a = NULL;
+    const TPM2B_DIGEST *cphash = NULL;
 
     ESYS_TR auth_entity_obj_session_handle = ESYS_TR_NONE;
     tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
@@ -713,7 +715,7 @@ tool_rc tpm2_policy_secret(ESYS_CONTEXT *esys_context,
         }
 
         TSS2_RC rval = Tss2_Sys_PolicySecret_Prepare(sys_context,
-            auth_entity_obj->handle, policy_session, nonce_tpm, cp_hash_a,
+            auth_entity_obj->handle, policy_session, nonce_tpm, cphash,
             policy_qualifier, expiration);
         if (rval != TPM2_RC_SUCCESS) {
             LOG_PERR(Tss2_Sys_PolicySecret_Prepare, rval);
@@ -750,7 +752,7 @@ tpm2_policysecret_free_name1:
 
     TSS2_RC rval = Esys_PolicySecret(esys_context, auth_entity_obj->tr_handle,
             policy_session, auth_entity_obj_session_handle, ESYS_TR_NONE,
-            ESYS_TR_NONE, nonce_tpm, cp_hash_a, policy_qualifier, expiration, timeout,
+            ESYS_TR_NONE, nonce_tpm, cphash, policy_qualifier, expiration, timeout,
             policy_ticket);
     if (rval != TSS2_RC_SUCCESS) {
         LOG_PERR(Esys_PolicySecret, rval);
@@ -783,6 +785,126 @@ tool_rc tpm2_policy_command_code(ESYS_CONTEXT *esys_context,
             shandle2, shandle3, code);
     if (rval != TSS2_RC_SUCCESS) {
         LOG_PERR(Esys_PolicyCommandCode, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_setcommandcodeaudit(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *auth_entity_obj, TPMI_ALG_HASH hash_algorithm,
+        const TPML_CC *setlist, const TPML_CC *clearlist) {
+
+    ESYS_TR auth_entity_obj_session_handle = ESYS_TR_NONE;
+    tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+            auth_entity_obj->tr_handle, auth_entity_obj->session,
+            &auth_entity_obj_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get auth entity obj session");
+        return rc;
+    }
+
+    TSS2_RC rval = Esys_SetCommandCodeAuditStatus(esys_context,
+    auth_entity_obj->tr_handle, auth_entity_obj_session_handle, ESYS_TR_NONE,
+    ESYS_TR_NONE, hash_algorithm, setlist, clearlist);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_SetCommandCodeAuditStatus, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_getcommandauditdigest(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *privacy_object, tpm2_loaded_object *sign_object,
+        TPMT_SIG_SCHEME *in_scheme, TPM2B_DATA *qualifying_data,
+        TPM2B_ATTEST **audit_info, TPMT_SIGNATURE **signature) {
+
+    ESYS_TR privacy_object_session_handle = ESYS_TR_NONE;
+    tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+            privacy_object->tr_handle, privacy_object->session,
+            &privacy_object_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get auth entity obj session");
+        return rc;
+    }
+
+    ESYS_TR sign_object_session_handle = ESYS_TR_NONE;
+    rc = tpm2_auth_util_get_shandle(esys_context,
+            sign_object->tr_handle, sign_object->session,
+            &sign_object_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get auth entity obj session");
+        return rc;
+    }
+
+    TSS2_RC rval = Esys_GetCommandAuditDigest(esys_context,
+    privacy_object->tr_handle, sign_object->tr_handle,
+    privacy_object_session_handle, sign_object_session_handle,
+    ESYS_TR_NONE, qualifying_data, in_scheme, audit_info, signature);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_GetCommandAuditDigest, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+static tool_rc evaluate_sessions_for_audit(ESYS_CONTEXT *ectx,
+ESYS_TR audit_session_handle) {
+
+    //Check if session is an audit session from the attributes
+    TPMA_SESSION attrs;
+    tool_rc rc = tpm2_sess_get_attributes(ectx, audit_session_handle,
+    &attrs);
+    if (rc != tool_rc_success) {
+        return rc;
+    }
+    if (!(attrs & TPMA_SESSION_AUDIT)) {
+        LOG_ERR("Session does not have audit attributes setup.");
+        return tool_rc_general_error;
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_getsessionauditdigest(ESYS_CONTEXT *esys_context,
+        tpm2_loaded_object *privacy_object, tpm2_loaded_object *sign_object,
+        TPMT_SIG_SCHEME *in_scheme, TPM2B_DATA *qualifying_data,
+        TPM2B_ATTEST **audit_info, TPMT_SIGNATURE **signature,
+        ESYS_TR audit_session_handle) {
+
+    tool_rc rc = audit_session_handle == ESYS_TR_NONE ? tool_rc_general_error :
+    evaluate_sessions_for_audit(esys_context, audit_session_handle);
+    if (rc != tool_rc_success) {
+        return rc;
+    }
+
+    ESYS_TR privacy_object_session_handle = ESYS_TR_NONE;
+    rc = tpm2_auth_util_get_shandle(esys_context,
+            privacy_object->tr_handle, privacy_object->session,
+            &privacy_object_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get auth entity obj session");
+        return rc;
+    }
+
+    ESYS_TR sign_object_session_handle = ESYS_TR_NONE;
+    rc = tpm2_auth_util_get_shandle(esys_context,
+            sign_object->tr_handle, sign_object->session,
+            &sign_object_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get auth entity obj session");
+        return rc;
+    }
+
+    TSS2_RC rval = Esys_GetSessionAuditDigest(esys_context,
+    privacy_object->tr_handle, sign_object->tr_handle,
+    audit_session_handle, privacy_object_session_handle,
+    sign_object_session_handle, ESYS_TR_NONE, qualifying_data, in_scheme,
+    audit_info, signature);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_GetCommandAuditDigest, rval);
         return tool_rc_from_tpm(rval);
     }
 
@@ -3759,16 +3881,63 @@ tool_rc tpm2_pcr_event(ESYS_CONTEXT *ectx,
 }
 
 tool_rc tpm2_getrandom(ESYS_CONTEXT *ectx, UINT16 count,
-        TPM2B_DIGEST **random) {
+        TPM2B_DIGEST **random, TPM2B_DIGEST *cp_hash, TPM2B_DIGEST *rp_hash,
+        ESYS_TR audit_session_handle, TPMI_ALG_HASH param_hash_algorithm) {
 
-    TSS2_RC rval = Esys_GetRandom(ectx, ESYS_TR_NONE, ESYS_TR_NONE,
+    tool_rc rc = audit_session_handle == ESYS_TR_NONE ? tool_rc_success :
+    evaluate_sessions_for_audit(ectx, audit_session_handle);
+    if (rc != tool_rc_success) {
+        return rc;
+    }
+
+    TSS2_SYS_CONTEXT *sys_context = NULL;
+    TSS2_RC rval;
+    if (cp_hash || rp_hash) {
+        /*
+         * Need sys_context to be able to calculate CpHash
+         */
+        rc = tpm2_getsapicontext(ectx, &sys_context);
+        if(rc != tool_rc_success) {
+            LOG_ERR("Failed to acquire SAPI context.");
+            return rc;
+        }
+    }
+
+    if (cp_hash) {
+        rval = Tss2_Sys_GetRandom_Prepare(sys_context, count);
+        if (rval != TPM2_RC_SUCCESS) {
+            LOG_PERR(Tss2_Sys_GetRandom_Prepare, rval);
+            return tool_rc_general_error;
+        }
+
+        cp_hash->size = tpm2_alg_util_get_hash_size(param_hash_algorithm);
+        rc = tpm2_sapi_getcphash(sys_context, NULL, NULL, NULL,
+        param_hash_algorithm, cp_hash);
+        if (rc != tool_rc_success) {
+            return rc;
+        }
+        /*
+         * Exit here without making the ESYS call since if we only need cpHash
+         */
+        if (!rp_hash) {
+            goto tpm2_getrandom_skip_esapi_call;
+        }
+    }
+
+    rval = Esys_GetRandom(ectx, audit_session_handle, ESYS_TR_NONE,
         ESYS_TR_NONE, count, random);
     if (rval != TPM2_RC_SUCCESS) {
         LOG_PERR(Esys_GetRandom, rval);
         return tool_rc_from_tpm(rval);
     }
 
-    return tool_rc_success;
+    if (rp_hash) {
+        rc = tpm2_sapi_getrphash(sys_context, rval, rp_hash,
+        param_hash_algorithm);
+    }
+
+tpm2_getrandom_skip_esapi_call:
+    return rc;
 }
 
 tool_rc tpm2_startup(ESYS_CONTEXT *ectx, TPM2_SU startup_type) {
@@ -4064,6 +4233,119 @@ tpm2_gettime_skip_esapi_call:
     return rc;
 }
 
+tool_rc tpm2_geteccparameters(ESYS_CONTEXT *esys_context,
+    TPMI_ECC_CURVE curve_id, TPMS_ALGORITHM_DETAIL_ECC **parameters) {
+
+    TSS2_RC rval = Esys_ECC_Parameters(esys_context, ESYS_TR_NONE, ESYS_TR_NONE,
+        ESYS_TR_NONE, curve_id, parameters);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_ECC_Parameters, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_ecephemeral(ESYS_CONTEXT *esys_context, TPMI_ECC_CURVE curve_id,
+    TPM2B_ECC_POINT **Q, uint16_t *counter) {
+
+    TSS2_RC rval = Esys_EC_Ephemeral(esys_context, ESYS_TR_NONE, ESYS_TR_NONE,
+        ESYS_TR_NONE, curve_id, Q, counter);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_EC_Ephemeral, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_commit(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *signing_key_object, TPM2B_ECC_POINT *P1,
+    TPM2B_SENSITIVE_DATA *s2, TPM2B_ECC_PARAMETER *y2, TPM2B_ECC_POINT **K,
+    TPM2B_ECC_POINT **L, TPM2B_ECC_POINT **E, uint16_t *counter) {
+
+    ESYS_TR signing_key_obj_session_handle = ESYS_TR_NONE;
+    tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+        signing_key_object->tr_handle, signing_key_object->session,
+        &signing_key_obj_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get shandle");
+        return rc;
+    }
+
+    TSS2_RC rval = Esys_Commit(esys_context, signing_key_object->tr_handle,
+        signing_key_obj_session_handle, ESYS_TR_NONE, ESYS_TR_NONE, P1, s2, y2,
+        K, L, E, counter);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_Commit, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_ecdhkeygen(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *ecc_public_key, TPM2B_ECC_POINT **Z,
+    TPM2B_ECC_POINT **Q) {
+
+    TSS2_RC rval = Esys_ECDH_KeyGen(esys_context, ecc_public_key->tr_handle,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE, Z, Q);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_ECDH_KeyGen, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_ecdhzgen(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *ecc_key_object, TPM2B_ECC_POINT **Z,
+    TPM2B_ECC_POINT *Q) {
+
+    ESYS_TR ecc_key_obj_session_handle = ESYS_TR_NONE;
+    tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+        ecc_key_object->tr_handle, ecc_key_object->session,
+        &ecc_key_obj_session_handle);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Failed to get shandle");
+        return rc;
+    }
+
+    TSS2_RC rval = Esys_ECDH_ZGen(esys_context, ecc_key_object->tr_handle,
+    ecc_key_obj_session_handle, ESYS_TR_NONE, ESYS_TR_NONE, Q, Z);
+    if (rval != TSS2_RC_SUCCESS) {
+        LOG_PERR(Esys_ECDH_ZGen, rval);
+        return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc tpm2_zgen2phase(ESYS_CONTEXT *esys_context,
+    tpm2_loaded_object *ecc_key_object, TPM2B_ECC_POINT *Q1,
+    TPM2B_ECC_POINT *Q2, TPM2B_ECC_POINT **Z1, TPM2B_ECC_POINT **Z2,
+    TPMI_ECC_KEY_EXCHANGE keyexchange_scheme, UINT16 commit_counter) {
+
+        ESYS_TR ecc_key_obj_session_handle = ESYS_TR_NONE;
+        tool_rc rc = tpm2_auth_util_get_shandle(esys_context,
+            ecc_key_object->tr_handle, ecc_key_object->session,
+            &ecc_key_obj_session_handle);
+        if (rc != tool_rc_success) {
+            LOG_ERR("Failed to get shandle");
+            return rc;
+        }
+
+        TSS2_RC rval = Esys_ZGen_2Phase(esys_context, ecc_key_object->tr_handle,
+            ecc_key_obj_session_handle, ESYS_TR_NONE, ESYS_TR_NONE, Q1, Q2,
+            keyexchange_scheme, commit_counter, Z1, Z2);
+        if (rval != TSS2_RC_SUCCESS) {
+            LOG_PERR(Esys_ZGen_2Phase, rval);
+            return tool_rc_from_tpm(rval);
+        }
+
+        return tool_rc_success;
+}
+
 tool_rc tpm2_getsapicontext(ESYS_CONTEXT *esys_context,
     TSS2_SYS_CONTEXT **sys_context) {
 
@@ -4074,6 +4356,60 @@ tool_rc tpm2_getsapicontext(ESYS_CONTEXT *esys_context,
     }
 
     return tool_rc_success;
+}
+
+tool_rc tpm2_sapi_getrphash(TSS2_SYS_CONTEXT *sys_context,
+TSS2_RC response_code, TPM2B_DIGEST *rp_hash, TPMI_ALG_HASH halg) {
+
+    uint8_t command_code[4];
+    TSS2_RC rval = Tss2_Sys_GetCommandCode(sys_context, &command_code[0]);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Tss2_Sys_GetCommandCode, rval);
+        return tool_rc_general_error;
+    }
+
+    const uint8_t *response_parameters;
+    size_t response_parameters_size;
+    rval = Tss2_Sys_GetRpBuffer(sys_context, &response_parameters_size,
+        &response_parameters);
+    if (rval != TPM2_RC_SUCCESS) {
+        LOG_PERR(Tss2_Sys_GetRpBuffer, rval);
+        return tool_rc_general_error;
+    }
+
+    uint16_t to_hash_len = sizeof(response_code) +
+                           sizeof(command_code) +
+                           response_parameters_size;
+
+    uint8_t *to_hash = malloc(to_hash_len);
+    if (!to_hash) {
+        LOG_ERR("oom");
+        return tool_rc_general_error;
+    }
+
+    //Response-Code
+    memcpy(to_hash, (uint8_t *)&response_code, sizeof(response_code));
+    uint16_t offset = sizeof(response_code);
+
+
+    //Command-Code
+    memcpy(to_hash + offset, command_code, sizeof(command_code));
+    offset += sizeof(command_code);
+
+    //RpBuffer
+    memcpy(to_hash + offset, response_parameters, response_parameters_size);
+
+    //rpHash
+    tool_rc rc = tool_rc_success;
+    bool result = tpm2_openssl_hash_compute_data(halg, to_hash, to_hash_len,
+        rp_hash);
+    free(to_hash);
+    if (!result) {
+        LOG_ERR("Failed rpHash digest calculation.");
+        rc = tool_rc_general_error;
+    }
+
+    return rc;
 }
 
 tool_rc tpm2_sapi_getcphash(TSS2_SYS_CONTEXT *sys_context,
