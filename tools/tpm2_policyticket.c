@@ -54,7 +54,7 @@ static bool on_option(char key, char *value) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     static struct option topts[] = {
         { "policy",         required_argument, NULL, 'L' },
@@ -71,7 +71,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
     return *opts != NULL;
 }
 
-bool is_input_option_args_valid(void) {
+static bool is_input_option_args_valid(void) {
 
     if (!ctx.session_path) {
         LOG_ERR("Must specify -S session file.");
@@ -96,7 +96,7 @@ bool is_input_option_args_valid(void) {
     return true;
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
 
     UNUSED(flags);
 
@@ -127,8 +127,11 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     return tool_rc_success;
 }
 
-tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
+static tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
 
     UNUSED(ectx);
     return tpm2_session_close(&ctx.session);
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("policyticket", tpm2_tool_onstart, tpm2_tool_onrun, tpm2_tool_onstop, NULL)

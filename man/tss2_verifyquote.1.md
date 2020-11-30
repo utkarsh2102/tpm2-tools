@@ -10,12 +10,16 @@
 
 **tss2_verifyquote** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
 **tss2_verifyquote**(1) - This command verifies that the data returned by a quote is valid. This includes
 
   * Reconstructing the quoteInfo's PCR values from the eventLog (if an eventLog was provided)
   * Verifying the quoteInfo using the signature and the publicKeyPath
+
+The used signature verification scheme is specified in the cryptographic profile (cf., **fapi-profile(5)**).
 
 An application using tss2_verifyquote() will further have to
 
@@ -26,11 +30,11 @@ An application using tss2_verifyquote() will further have to
 
 These are the available options:
 
-  * **-Q**, **\--qualifyingData** _FILENAME_ or _-_ (for stdin):
+  * **-Q**, **\--qualifyingData**=_FILENAME_ or _-_ (for stdin):
 
     A nonce provided by the caller to ensure freshness of the signature. Optional parameter.
 
-  * **-l**, **\--pcrLog** _FILENAME_ or _-_ (for stdin):
+  * **-l**, **\--pcrLog**=_FILENAME_ or _-_ (for stdin):
 
     Returns the PCR event log for the chosen PCR. Optional parameter.
 
@@ -44,15 +48,15 @@ These are the available options:
         - eventDigest: Digest of the event; e.g. the digest of the measured file
         - eventName: Name of the event; e.g. the name of the measured file.
 
-  * **-q**, **\--quoteInfo** _FILENAME_ or _-_ (for stdin):
+  * **-q**, **\--quoteInfo**=_FILENAME_ or _-_ (for stdin):
 
     The JSON-encoded structure holding the inputs to the quote operation. This includes the digest value and PCR values.
 
-  * **-k**, **\--publicKeyPath** _STRING_:
+  * **-k**, **\--publicKeyPath**=_STRING_:
 
     Identifies the signing key. MAY be a path to the public key hierarchy /ext.
 
-  * **-i**, **\--signature** _FILENAME_ or _-_ (for stdin):
+  * **-i**, **\--signature**=_FILENAME_ or _-_ (for stdin):
 
     The signature over the quoted material.
 
@@ -61,7 +65,7 @@ These are the available options:
 # EXAMPLE
 
 ```
-    tss2_verifyquote --publicKeyPath "ext/myNewParent" --qualifyingData qualifyingData.file --quoteInfo quoteInfo.file --signature signature.file --pcrLog pcrLog.file
+    tss2_verifyquote --publicKeyPath="ext/myNewParent" --qualifyingData=qualifyingData.file --quoteInfo=quoteInfo.file --signature=signature.file --pcrLog=pcrLog.file
 ```
 
 # RETURNS

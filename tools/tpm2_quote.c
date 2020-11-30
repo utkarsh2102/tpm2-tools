@@ -11,6 +11,7 @@
 #include "tpm2_alg_util.h"
 #include "tpm2_convert.h"
 #include "tpm2_openssl.h"
+#include "tpm2_systemdeps.h"
 #include "tpm2_tool.h"
 
 typedef struct tpm_quote_ctx tpm_quote_ctx;
@@ -37,18 +38,25 @@ struct tpm_quote_ctx {
 };
 
 static tpm_quote_ctx ctx = {
-    .sig_hash_algorithm = TPM2_ALG_SHA256,
+    .sig_hash_algorithm = TPM2_ALG_NULL,
     .qualification_data = TPM2B_EMPTY_INIT,
 };
 
 
 // write all PCR banks according to g_pcrSelection & g_pcrs->
 static bool write_pcr_values() {
+    UINT32 count;
 
     // PCR output to file wasn't requested
     if (ctx.pcr_output == NULL) {
         return true;
     }
+
+    // Make sure the file content is written in little endian format
+    ctx.pcr_selections.count = htole32(ctx.pcr_selections.count);
+    UINT32 i;
+    for (i = 0; i < le32toh(ctx.pcr_selections.count); i++)
+        ctx.pcr_selections.pcrSelections[i].hash = htole16(ctx.pcr_selections.pcrSelections[i].hash);
 
     // Export TPML_PCR_SELECTION structure to pcr outfile
     if (fwrite(&ctx.pcr_selections, sizeof(TPML_PCR_SELECTION), 1,
@@ -57,14 +65,21 @@ static bool write_pcr_values() {
         return false;
     }
 
+    count = htole32(ctx.pcrs.count);
     // Export PCR digests to pcr outfile
-    if (fwrite(&ctx.pcrs.count, sizeof(UINT32), 1, ctx.pcr_output) != 1) {
+    if (fwrite(&count, sizeof(UINT32), 1, ctx.pcr_output) != 1) {
         LOG_ERR("write to output file failed: %s", strerror(errno));
         return false;
     }
 
     UINT32 j;
     for (j = 0; j < ctx.pcrs.count; j++) {
+        ctx.pcrs.pcr_values[j].count = htole32(ctx.pcrs.pcr_values[j].count);
+
+        UINT32 k;
+        for(k = 0; k < le32toh(ctx.pcrs.pcr_values[j].count); k++)
+            ctx.pcrs.pcr_values[j].digests[k].size = htole16(ctx.pcrs.pcr_values[j].digests[k].size);
+
         if (fwrite(&ctx.pcrs.pcr_values[j], sizeof(TPML_DIGEST), 1,
                 ctx.pcr_output) != 1) {
             LOG_ERR("write to output file failed: %s", strerror(errno));
@@ -100,7 +115,7 @@ static tool_rc quote(ESYS_CONTEXT *ectx, TPML_PCR_SELECTION *pcr_selection) {
     TPMT_SIG_SCHEME in_scheme = { .scheme = TPM2_ALG_NULL };
 
     tool_rc rc = tpm2_alg_util_get_signature_scheme(ectx,
-            ctx.key.object.tr_handle, ctx.sig_hash_algorithm, TPM2_ALG_NULL,
+            ctx.key.object.tr_handle, &ctx.sig_hash_algorithm, TPM2_ALG_NULL,
             &in_scheme);
     if (rc != tool_rc_success) {
         return rc;
@@ -252,7 +267,7 @@ static bool on_option(char key, char *value) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     static const struct option topts[] = {
         { "key-context",    required_argument, NULL, 'c' },
@@ -273,7 +288,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
     return *opts != NULL;
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
 
     UNUSED(flags);
 
@@ -312,10 +327,13 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     return quote(ectx, &ctx.pcr_selections);
 }
 
-tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
+static tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
     UNUSED(ectx);
     if (ctx.pcr_output) {
         fclose(ctx.pcr_output);
     }
     return tpm2_session_close(&ctx.key.object.session);
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("quote", tpm2_tool_onstart, tpm2_tool_onrun, tpm2_tool_onstop, NULL)

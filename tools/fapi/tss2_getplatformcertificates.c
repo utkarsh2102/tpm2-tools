@@ -6,9 +6,6 @@
 #include <string.h>
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed commandline parameters */
 static struct cxt {
     char const *certificates;
@@ -29,7 +26,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible commandline parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"force",           no_argument      , NULL, 'f'},
         {"certificates",    required_argument, NULL, 'o'}
@@ -39,7 +36,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
     if (!ctx.certificates) {
         fprintf (stderr, "certificates missing, use --certificates\n");
@@ -62,7 +59,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.certificates, ctx.overwrite,
             certificates, certificatesSize);
         if (r) {
-            LOG_PERR ("open_write_and_close certificates", r);
             Fapi_Free (certificates);
             return 1;
         }
@@ -72,3 +68,5 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
 
     return 0;
 }
+
+TSS2_TOOL_REGISTER("getplatformcertificates", tss2_tool_onstart, tss2_tool_onrun, NULL)

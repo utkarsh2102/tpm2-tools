@@ -207,21 +207,6 @@ void tpm2_util_hexdump2(FILE *f, const BYTE *data, size_t len);
 bool tpm2_util_bin_from_hex_or_file(const char *input, UINT16 *len, BYTE *buffer);
 
 /**
- * Prints a file as a hex string to stdout if quiet mode
- * is not enabled.
- * ie no -Q option.
- *
- * @param fd
- *  A readable open file.
- * @param len
- *  The length of the data to read and print.
- * @return
- *  true if len bytes were successfully read and printed,
- *  false otherwise
- */
-bool tpm2_util_hexdump_file(FILE *fd, size_t len);
-
-/**
  * Prints a TPM2B as a hex dump respecting the -Q option
  * to stdout.
  *
@@ -243,7 +228,7 @@ static inline void _tpm2_util_print_tpm2b(TPM2B *buffer) {
  *   buffer the TPM2B to print.
  */
 #define tpm2_util_print_tpm2b2(o, b) _tpm2_util_print_tpm2b2(o, (TPM2B *)b)
-static inline void _tpm2_util_print_tpm2b2(FILE *out, TPM2B *buffer) {
+static inline void _tpm2_util_print_tpm2b2(FILE *out, const TPM2B *buffer) {
 
     return tpm2_util_hexdump2(out, buffer->buffer, buffer->size);
 }
@@ -254,16 +239,9 @@ static inline void _tpm2_util_print_tpm2b2(FILE *out, TPM2B *buffer) {
  * @param pcr the PCR ID to check selection status of.
  */
 static inline bool tpm2_util_is_pcr_select_bit_set(
-        TPMS_PCR_SELECTION *pcr_selection, UINT32 pcr) {
+        const TPMS_PCR_SELECTION *pcr_selection, UINT32 pcr) {
     return (pcr_selection->pcrSelect[((pcr) / 8)] & (1 << ((pcr) % 8)));
 }
-
-/**
- * Reads a TPM2B object from FILE* and prints data in hex.
- * @param fd
- *  A readable open file.
- */
-bool tpm2_util_print_tpm2b_file(FILE *fd);
 
 /**
  * Checks if the host is big endian
@@ -354,6 +332,8 @@ void print_yaml_indent(size_t indent_count);
  */
 void tpm2_util_public_to_yaml(TPM2B_PUBLIC *public, char *indent);
 
+void tpm2_util_tpmt_public_to_yaml(TPMT_PUBLIC *public, char *indent);
+
 /**
  * Convert a TPMA_OBJECT to a yaml format and output if not quiet.
  * @param obj
@@ -397,20 +377,6 @@ bool tpm2_util_calc_unique(TPMI_ALG_HASH name_alg,
  */
 tool_rc tpm2_util_sys_handle_to_esys_handle(ESYS_CONTEXT *context,
         TPM2_HANDLE sys_handle, ESYS_TR *esys_handle);
-
-/**
- * Get the underlying TPM2_HANDLE for the given ESYS_TR handle
- * @param context
- *  an ESAPI context
- * @param esys_handle
- *  the ESYS_TR for which a TPM handle is desired
- * @param sys_handle
- *  pointer to the TPM2_HANDLE in which to store the output
- * @return
- *  A tool_rc indicating status.
- */
-tool_rc tpm2_util_esys_handle_to_sys_handle(ESYS_CONTEXT *context,
-        ESYS_TR esys_handle, TPM2_HANDLE *sys_handle);
 
 /**
  * Map a TPMI_RH_PROVISION to the corresponding ESYS_TR constant
@@ -462,5 +428,32 @@ bool tpm2_util_get_label(const char *value, TPM2B_DATA *label);
  *  The time structure to print
  */
 void tpm2_util_print_time(const TPMS_TIME_INFO *current_time);
+
+/**
+ * Given the parent qualified name and the name of an object, computes
+ * that objects qualified name.
+ *
+ * The qualified name is defined as:
+ * QNB ≔ HB (QNA || NAMEB)
+ *
+ * Where:
+ *  - QNB is the qualified name of the object.
+ *  - HB is the name hash algorithm of the object.
+ *  - QNA is the qualified name of the parent object.
+ *  - NAMEB is the name of the object.
+ *
+ * @param pqname
+ *  The parent qualified name.
+ * @param halg
+ *  The name hash algorithm of the object.
+ * @param name
+ *  The name of the object.
+ * @param qname
+ *  The output qname, valid on success.
+ * @return
+ *  True on success, false otherwise.
+ */
+bool tpm2_calq_qname(TPM2B_NAME *pqname,
+        TPMI_ALG_HASH halg, TPM2B_NAME *name, TPM2B_NAME *qname);
 
 #endif /* STRING_BYTES_H */

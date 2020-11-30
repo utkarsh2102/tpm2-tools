@@ -10,19 +10,22 @@
 
 **tss2_createseal** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
-**tss2_createseal**(1) - This command creates a sealed object and stores it in the FAPI metadata store. If no data is provided (i.e. a NULL-pointer) then the TPM generates random data and fills the sealed object.
+**tss2_createseal**(1) - This command creates a sealed object and stores it in the FAPI metadata store. If no data is provided (i.e. a NULL-pointer) then the TPM generates random data and fills the sealed object. TPM signing schemes are used as specified in
+the cryptographic profile (cf., **fapi-profile(5)**).
 
 # OPTIONS
 
 These are the available options:
 
-  * **-p**, **\--path** _STRING_:
+  * **-p**, **\--path**=_STRING_:
 
     The path to the new key.
 
-  * **-t**, **\--type** _STRING_:
+  * **-t**, **\--type**=_STRING_:
 
     Identifies the intended usage. Optional parameter.
     Types may be any comma-separated combination of:
@@ -35,7 +38,7 @@ These are the available options:
         - A hexadecimal number (e.g. "0x81000001"): Marks a key object to be
           made persistent and sets the persistent object handle to this value.
 
-  * **-P**, **\--policyPath** _STRING_:
+  * **-P**, **\--policyPath**=_STRING_:
 
     Identifies the policy to be associated with the new key. Optional parameter.
     If omitted then no policy will be associated with the key.
@@ -44,15 +47,25 @@ These are the available options:
     starts with "/policy". The second path element identifies the policy
     or policy template using a meaningful name.
 
-  * **-a**, **\--authValue** _STRING_:
+  * **-a**, **\--authValue**=_STRING_:
 
     The new UTF-8 password. Optional parameter. If it is neglected then the user
     is queried interactively for a password. To set no password, this option
-    should be used with the empty string ("").
+    should be used with the empty string (""). The maximum password size is
+    determined by the digest size of the chosen name hash algorithm in the
+    cryptographic profile (cf., **fapi-profile(5)**). For example, choosing
+    SHA256 as hash algorithm, allows passwords of a maximum size of 32
+    characters.
 
-  * **-i**, **\--data** _FILENAME_ or _-_ (for stdin):
+  * **-i**, **\--data**=_FILENAME_ or _-_ (for stdin):
 
-    The data to be sealed by the TPM. Optional parameter.
+    The data to be sealed by the TPM. Optional parameter. Must not be used
+    together with \--size.
+
+  * **-s**, **\--size**=_INTEGER_:
+
+    Determines the number of random bytes the TPM should generate and seal.
+    Optional parameter. Must not be "0". Must no be used together with \--data.
 
 [common tss2 options](common/tss2-options.md)
 
@@ -60,7 +73,7 @@ These are the available options:
 
 ## Create a key with password "abc" and read sealing data from file.
 ```
-tss2_createseal --path HS/SRK/mySealKey --type "noDa" --authValue abc --data data.file
+tss2_createseal --path=HS/SRK/mySealKey --type="noDa" --authValue=abc --data=data.file
 ```
 
 # RETURNS

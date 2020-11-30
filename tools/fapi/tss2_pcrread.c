@@ -6,11 +6,9 @@
 #include <string.h>
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed command line parameters */
 static struct cxt {
+    bool            pcr_set;
     uint32_t        pcrIndex;
     char     const *pcrValue;
     char     const *pcrLog;
@@ -29,6 +27,7 @@ static bool on_option(char key, char *value) {
                 "2**32-1\n");
             return false;
         }
+	ctx.pcr_set = true;
         break;
     case 'f':
         ctx.overwrite = true;
@@ -41,7 +40,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"pcrIndex"     , required_argument, NULL, 'x'},
         {"pcrValue"     , required_argument, NULL, 'o'},
@@ -53,9 +52,9 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
-    if (!ctx.pcrIndex) {
+    if (!ctx.pcr_set) {
         fprintf (stderr, "No PCR index provided, use --pcrIndex\n");
         return -1;
     }
@@ -88,7 +87,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         if (r) {
             Fapi_Free (pcrLog);
             Fapi_Free (pcrValue);
-            LOG_PERR ("open_write_and_close pcrValue", r);
             return 1;
         }
     }
@@ -99,13 +97,14 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         if (r) {
             Fapi_Free (pcrLog);
             Fapi_Free (pcrValue);
-            LOG_PERR ("open_write_and_close pcrLog", r);
             return 1;
         }
     }
 
-    Fapi_Free (pcrValue);
     Fapi_Free (pcrLog);
+    Fapi_Free (pcrValue);
 
-    return r;
+    return 0;
 }
+
+TSS2_TOOL_REGISTER("pcrread", tss2_tool_onstart, tss2_tool_onrun, NULL)

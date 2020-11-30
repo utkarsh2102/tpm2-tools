@@ -12,21 +12,22 @@
 
 # DESCRIPTION
 
-**tss2_verifysignature**(1) - This command verifies a signature using a public key found in the passed key path.
+**tss2_verifysignature**(1) - This command verifies a signature using a public key found in the passed key path. The used signature verification scheme is specified in the cryptographic profile (cf., **fapi-profile(5)**).
 
 # OPTIONS
 
 These are the available options:
 
-  * **-d**, **\--digest** _FILENAME_ or _-_ (for stdin):
+  * **-d**, **\--digest**=_FILENAME_ or _-_ (for stdin):
 
-    The data that was signed, already hashed.
+    The data that was signed, already hashed according to the cryptographic
+    profile (cf., **fapi-profile(5)**).
 
-  * **-p**, **\--keyPath** _STRING_:
+  * **-p**, **\--keyPath**=_STRING_:
 
     Path to the verification public key.
 
-  * **-i**, **\--signature** _FILENAME_ or _-_ (for stdin):
+  * **-i**, **\--signature**=_FILENAME_ or _-_ (for stdin):
 
     The signature to be verified.
 
@@ -36,7 +37,7 @@ These are the available options:
 # EXAMPLE
 
 ```
-tss2_verifysignature --keyPath ext/myRSASign --digest digest.file --signature signature.file
+tss2_verifysignature --keyPath=ext/myRSASign --digest=digest.file --signature=signature.file
 ```
 
 # RETURNS

@@ -5,9 +5,6 @@
 #include <string.h>
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed command line parameters */
 static struct cxt {
     char *publicKeyPath;
@@ -40,7 +37,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"publicKeyPath",   required_argument, NULL, 'k'},
         {"qualifyingData",  required_argument, NULL, 'Q'},
@@ -53,7 +50,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
     if (!ctx.quoteInfo) {
         fprintf (stderr, "quote info parameter not provided, use "\
@@ -91,7 +88,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_read_and_close (ctx.qualifyingData,
             (void**)&qualifyingData, &qualifyingDataSize);
         if (r) {
-            LOG_PERR ("open_read_and_close qualifyingData", r);
             return -1;
         }
     }
@@ -101,7 +97,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     if (ctx.signature) {
         r = open_read_and_close (ctx.signature, (void**)&signature, &signatureSize);
         if (r) {
-            LOG_PERR ("open_read_and_close signature", r);
             free (qualifyingData);
             return -1;
         }
@@ -111,7 +106,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     if (ctx.quoteInfo) {
         r = open_read_and_close (ctx.quoteInfo, (void**)&quoteInfo, NULL);
         if (r) {
-            LOG_PERR ("open_read_and_close quoteInfo", r);
             free (qualifyingData);
             free (signature);
             return -1;
@@ -122,7 +116,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     if (ctx.pcrLog) {
         r = open_read_and_close (ctx.pcrLog, (void**)&pcrLog, NULL);
         if (r) {
-            LOG_PERR ("open_read_and_close pcrLog", r);
             free (qualifyingData);
             free (signature);
             free (quoteInfo);
@@ -135,6 +128,10 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         qualifyingDataSize, quoteInfo, signature, signatureSize,
         pcrLog);
     if (r != TSS2_RC_SUCCESS){
+        free (qualifyingData);
+        free (signature);
+        free (quoteInfo);
+        free (pcrLog);
         LOG_PERR ("Fapi_VerifyQuote", r);
         return 1;
     }
@@ -146,3 +143,5 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
 
     return 0;
 }
+
+TSS2_TOOL_REGISTER("verifyquote", tss2_tool_onstart, tss2_tool_onrun, NULL)

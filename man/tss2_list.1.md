@@ -10,23 +10,29 @@
 
 **tss2_list** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
-**tss2_list**(1) - This command enumerates all objects in the metadata store in a given a path.
+**tss2_list**(1) - This command enumerates all objects in the FAPI metadata store in a given a path.
 
 # OPTIONS
 
 These are the available options:
 
-  * **-p**, **\--searchPath** _STRING_:
+  * **-f**, **\--force**:
+
+    Force overwriting the output file.
+
+  * **-p**, **\--searchPath**=_STRING_:
 
     The path identifying the root of the search. Optional parameter. If omitted,
     all entities will be searched.
 
-  * **-o**, **\--pathList** _FILENAME_ or _-_ (for stdout):
+  * **-o**, **\--pathList**=_FILENAME_ or _-_ (for stdout):
 
     Returns the colon-separated list of paths. Optional parameter. If omitted,
-    results will be printed to _STDOUT_.
+    results will be printed to _-_ (stdout).
 
 [common tss2 options](common/tss2-options.md)
 
@@ -38,7 +44,7 @@ tss2_list
 ```
 ## List all entities under the HS path and print results to file
 ```
-tss2_list --searchPath HS --pathList output.file
+tss2_list --searchPath=HS --pathList=output.file
 ```
 
 # RETURNS

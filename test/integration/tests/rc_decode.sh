@@ -12,8 +12,8 @@ fi
 
 #
 # codes was generated from the TPM2_RC constants in:
-# https://github.com/tpm2-software/tpm2-tss/blob/master/include/sapi/tss2_tpm2_types.h#L68
-# Some of these may not be used correctly, which is OK, as tpm2_rc_decode never
+# https://github.com/tpm2-software/tpm2-tss/blob/master/include/sapi/tss2_tpm2 types.h#L68
+# Some of these may not be used correctly, which is OK, as tpm2 rc_decode never
 # fails and should attempt to decode it or print some unknown status. This gives
 # us coverage for both known and unknown/malformed inputs.
 #
@@ -55,7 +55,7 @@ fail=0
 for key in "${!codes[@]}"; do
     value="$(printf '0x%03x' "$(eval echo ${codes[$key]%%:*})")"
     expected_msg="${codes[$key]##*:}"
-    received_msg="$(tpm2_rc_decode ${value} | cut -d':' -f3)"
+    received_msg="$(tpm2 rc_decode ${value} | cut -d':' -f3)"
 
     if ! grep -iq "${received_msg# }" <<< "${expected_msg}"; then
         echo "$value raised an invalid error message"
@@ -68,7 +68,7 @@ done
 #
 # Negative tests
 #
-if tpm2_rc_decode 0x6666329840938498293849238 &>/dev/null; then
+if tpm2 rc_decode 0x6666329840938498293849238 &>/dev/null; then
     echo "Expected \"$cmd\" to fail."
     fail=1
 else

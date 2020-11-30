@@ -7,6 +7,7 @@
 #include "files.h"
 #include "log.h"
 #include "tpm2.h"
+#include "tpm2_tool.h"
 #include "tpm2_alg_util.h"
 #include "tpm2_convert.h"
 #include "tpm2_hash.h"
@@ -38,10 +39,11 @@ struct tpm_sign_ctx {
     } flags;
 
     char *cp_hash_path;
+    char *commit_index;
 };
 
 static tpm_sign_ctx ctx = {
-        .halg = TPM2_ALG_SHA1,
+        .halg = TPM2_ALG_NULL,
         .sig_scheme = TPM2_ALG_NULL
 };
 
@@ -88,50 +90,61 @@ out:
 
 static tool_rc init(ESYS_CONTEXT *ectx) {
 
-    bool option_fail = false;
+    /*
+     * Set signature scheme for key type, or validate chosen scheme is
+     * allowed for key type.
+     */
+    tool_rc rc = tpm2_alg_util_get_signature_scheme(ectx,
+            ctx.signing_key.object.tr_handle, &ctx.halg, ctx.sig_scheme,
+            &ctx.in_scheme);
+    if (rc != tool_rc_success) {
+        LOG_ERR("Invalid signature scheme for key type!");
+        return rc;
+    }
+
+    if (ctx.in_scheme.scheme != TPM2_ALG_ECDAA && ctx.commit_index) {
+        LOG_ERR("Commit counter is only applicable in an ECDAA scheme.");
+        return tool_rc_option_error;
+    }
+
+    if (ctx.in_scheme.scheme == TPM2_ALG_ECDAA && ctx.commit_index) {
+        bool result = tpm2_util_string_to_uint16(ctx.commit_index,
+            &ctx.in_scheme.details.ecdaa.count);
+        if (!result) {
+            return tool_rc_general_error;
+        }
+    }
+
+    if (ctx.in_scheme.scheme == TPM2_ALG_ECDAA &&
+    ctx.sig_format != signature_format_tss) {
+        LOG_ERR("Only TSS signature format is possible with ECDAA scheme");
+        return tool_rc_option_error;
+    }
 
     if (ctx.cp_hash_path && ctx.output_path) {
-        LOG_ERR("Cannout output signature when calculating cpHash");
+        LOG_ERR("Cannot output signature when calculating cpHash");
         return tool_rc_option_error;
     }
 
     if (!ctx.signing_key.ctx_path) {
         LOG_ERR("Expected option c");
-        option_fail = true;
+        return tool_rc_option_error;
     }
 
     if (!ctx.flags.o && !ctx.cp_hash_path) {
         LOG_ERR("Expected option o");
-        option_fail = true;
-    }
-
-    if (option_fail) {
         return tool_rc_option_error;
     }
 
-    if (ctx.flags.d && ctx.flags.t) {
-        LOG_WARN("When using a pre-computed digest the validation ticket"
-                " is ignored.");
-    }
-
-    if (ctx.flags.d || !ctx.flags.t) {
-        ctx.validation.tag = TPM2_ST_HASHCHECK;
-        ctx.validation.hierarchy = TPM2_RH_NULL;
-        memset(&ctx.validation.digest, 0, sizeof(ctx.validation.digest));
+    if (!ctx.flags.d && ctx.flags.t) {
+        LOG_WARN("Ignoring the specified validation ticket since no TPM "
+                 "calculated digest specified.");
     }
 
     /*
-     * Set signature scheme for key type, or validate chosen scheme is allowed for key type.
+     * Applicable when input data is not a digest, rather the message to sign.
+     * A digest is calculated first in this case.
      */
-    tool_rc rc = tpm2_alg_util_get_signature_scheme(ectx,
-            ctx.signing_key.object.tr_handle, ctx.halg, ctx.sig_scheme,
-            &ctx.in_scheme);
-    if (rc != tool_rc_success) {
-        LOG_ERR("bad signature scheme for key type!");
-        return rc;
-    }
-
-    /* Process the msg file if needed */
     if (!ctx.flags.d) {
         FILE *input = ctx.input_file ? fopen(ctx.input_file, "rb") : stdin;
         if (!input) {
@@ -139,19 +152,28 @@ static tool_rc init(ESYS_CONTEXT *ectx) {
             return tool_rc_general_error;
         }
 
-        rc = tpm2_hash_file(ectx, ctx.halg, TPM2_RH_NULL, input, &ctx.digest,
-                NULL);
+        TPMT_TK_HASHCHECK *temp_validation_ticket;
+        rc = tpm2_hash_file(ectx, ctx.halg, TPM2_RH_OWNER, input, &ctx.digest,
+                &temp_validation_ticket);
         if (input != stdin) {
             fclose(input);
         }
         if (rc != tool_rc_success) {
             LOG_ERR("Could not hash input");
         }
+
+        ctx.validation = *temp_validation_ticket;
+        free(temp_validation_ticket);
+
+        /*
+         * we don't need to perform the digest, just read it
+         */
         return rc;
-        /* we don't need to perform the digest, just read it */
     }
 
-    /* else process it as a pre-computed digest */
+    /*
+     * else process it as a pre-computed digest
+     */
     ctx.digest = malloc(sizeof(TPM2B_DIGEST));
     if (!ctx.digest) {
         LOG_ERR("oom");
@@ -163,6 +185,17 @@ static tool_rc init(ESYS_CONTEXT *ectx) {
             ctx.input_file, &ctx.digest->size, ctx.digest->buffer);
     if (!result) {
         return tool_rc_general_error;
+    }
+
+    /*
+     * Applicable to un-restricted signing keys
+     * NOTE: When digests without tickets are specified for restricted keys,
+     * the sign operation will fail.
+     */
+    if (ctx.flags.d && !ctx.flags.t) {
+        ctx.validation.tag = TPM2_ST_HASHCHECK;
+        ctx.validation.hierarchy = TPM2_RH_NULL;
+        memset(&ctx.validation.digest, 0, sizeof(ctx.validation.digest));
     }
 
     return tool_rc_success;
@@ -212,6 +245,9 @@ static bool on_option(char key, char *value) {
     case 0:
         ctx.cp_hash_path = value;
         break;
+    case 1:
+        ctx.commit_index = value;
+        break;
     case 'f':
         ctx.sig_format = tpm2_convert_sig_fmt_from_optarg(value);
 
@@ -236,7 +272,7 @@ static bool on_args(int argc, char *argv[]) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     static const struct option topts[] = {
       { "auth",                 required_argument, NULL, 'p' },
@@ -248,6 +284,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
       { "key-context",          required_argument, NULL, 'c' },
       { "format",               required_argument, NULL, 'f' },
       { "cphash",               required_argument, NULL,  0  },
+      { "commit-index",       required_argument, NULL,  1  },
     };
 
     *opts = tpm2_options_new("p:g:dt:o:c:f:s:", ARRAY_LEN(topts), topts,
@@ -256,7 +293,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
     return *opts != NULL;
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
 
     UNUSED(flags);
 
@@ -276,15 +313,18 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     return sign_and_save(ectx);
 }
 
-tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
+static tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
     UNUSED(ectx);
     return tpm2_session_close(&ctx.signing_key.object.session);
 }
 
-void tpm2_tool_onexit(void) {
+static void tpm2_tool_onexit(void) {
 
     if (ctx.digest) {
         free(ctx.digest);
     }
     free(ctx.msg);
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("sign", tpm2_tool_onstart, tpm2_tool_onrun, tpm2_tool_onstop, tpm2_tool_onexit)

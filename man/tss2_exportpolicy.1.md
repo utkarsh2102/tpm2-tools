@@ -10,6 +10,8 @@
 
 **tss2_policyexport** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
 **tss2_policyexport**(1) - This commands exports a policy associated with a key
@@ -23,11 +25,11 @@ These are the available options:
 
     Force overwriting the output file.
 
-  * **-o**, **\--jsonPolicy** _FILENAME_ or _-_ (for stdout):
+  * **-o**, **\--jsonPolicy**=_FILENAME_ or _-_ (for stdout):
 
     Returns the JSON-encoded policy.
 
-  * **-p**, **\--path** _STRING_:
+  * **-p**, **\--path**=_STRING_:
 
     The path of the key.
 
@@ -35,7 +37,7 @@ These are the available options:
 
 # EXAMPLE
 ```
-tss2_exportpolicy --path HS/SRK/myRSASign --jsonPolicy jsonPolicy.json
+tss2_exportpolicy --path=HS/SRK/myRSASign --jsonPolicy=jsonPolicy.json
 ```
 
 # RETURNS

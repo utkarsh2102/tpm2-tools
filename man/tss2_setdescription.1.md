@@ -10,21 +10,23 @@
 
 **tss2_setdescription** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
-**tss2_setdescription**(1) - This command allows an application to assign a human readable description to an object in the metadata store.  The data is stored and can be returned with tss2_getdescription. Previously stored data is overwritten by this function. If an empty description is passed in, the stored data is deleted.
+**tss2_setdescription**(1) - This command allows an application to assign a human readable description to an object in the FAPI metadata store. The stored data can be returned with tss2_getdescription. Previously stored data is overwritten by this function. If an empty description is passed in, the stored data is deleted.
 
 # OPTIONS
 
 These are the available options:
 
-  * **-i**, **\--description** _STRING_:
+  * **-i**, **\--description**=_STRING_:
 
     The data to be stored as description for the object. Optional parameter.
     Previously stored descriptions are overwritten by this function. If omitted
     any stored description is deleted.
 
-  * **-p**, **\--path** _STRING_:
+  * **-p**, **\--path**=_STRING_:
 
     The path of the object for which the description will be stored.
 
@@ -34,7 +36,7 @@ These are the available options:
 # EXAMPLE
 
 ```
-tss2_setdescription --path HS/SRK --description description
+tss2_setdescription --path=HS/SRK --description=description
 ```
 
 # RETURNS

@@ -7,6 +7,7 @@
 #include "log.h"
 #include "pcr.h"
 #include "tpm2.h"
+#include "tpm2_tool.h"
 #include "tpm2_alg_util.h"
 #include "tpm2_auth_util.h"
 #include "tpm2_options.h"
@@ -47,7 +48,7 @@ struct tpm_create_ctx {
     TPML_PCR_SELECTION creation_pcr;
 
     struct {
-        UINT8 b :1;
+        UINT8 a :1;
         UINT8 i :1;
         UINT8 L :1;
         UINT8 u :1;
@@ -256,7 +257,7 @@ static bool on_option(char key, char *value) {
         break;
     case 'a':
         ctx.object.attrs = value;
-        ctx.flags.b = 1;
+        ctx.flags.a = 1;
         break;
     case 'i':
         ctx.object.sealed_data = strcmp("-", value) ? value : NULL;
@@ -309,7 +310,7 @@ static bool on_option(char key, char *value) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     static struct option topts[] = {
       { "parent-auth",    required_argument, NULL, 'P' },
@@ -369,7 +370,7 @@ static tool_rc check_options(void) {
     return tool_rc_success;
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
 
     UNUSED(flags);
 
@@ -389,23 +390,22 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
 
         ctx.object.alg = "keyedhash";
 
-        if (!ctx.flags.b) {
+        if (!ctx.flags.a) {
             attrs &= ~TPMA_OBJECT_SIGN_ENCRYPT;
             attrs &= ~TPMA_OBJECT_DECRYPT;
             attrs &= ~TPMA_OBJECT_SENSITIVEDATAORIGIN;
         }
-    } else if (!ctx.flags.b && !strncmp("hmac", ctx.object.alg, 4)) {
+    } else if (!ctx.flags.a && !strncmp("hmac", ctx.object.alg, 4)) {
         attrs &= ~TPMA_OBJECT_DECRYPT;
     }
 
-    bool result = tpm2_alg_util_public_init(ctx.object.alg, ctx.object.name_alg,
-            ctx.object.attrs, ctx.object.policy, NULL, attrs,
-            &ctx.object.public);
-    if (!result) {
-        return tool_rc_general_error;
+    rc = tpm2_alg_util_public_init(ctx.object.alg, ctx.object.name_alg,
+            ctx.object.attrs, ctx.object.policy, attrs, &ctx.object.public);
+    if (rc != tool_rc_success) {
+        return rc;
     }
 
-    if (ctx.flags.L && !ctx.object.auth_str) {
+    if (!ctx.flags.a && ctx.flags.L && !ctx.object.auth_str) {
         ctx.object.public.publicArea.objectAttributes &=
                 ~TPMA_OBJECT_USERWITHAUTH;
     }
@@ -438,8 +438,11 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *ectx, tpm2_option_flags flags) {
     return create(ectx);
 }
 
-tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
+static tool_rc tpm2_tool_onstop(ESYS_CONTEXT *ectx) {
     UNUSED(ectx);
 
     return tpm2_session_close(&ctx.parent.object.session);
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("create", tpm2_tool_onstart, tpm2_tool_onrun, tpm2_tool_onstop, NULL)

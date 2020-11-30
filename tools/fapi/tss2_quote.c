@@ -6,9 +6,6 @@
 #include <string.h>
 #include "tools/fapi/tss2_template.h"
 
-/* needed by tpm2_util and tpm2_option functions */
-bool output_enabled = false;
-
 /* Context struct used to store passed command line parameters */
 static struct cxt {
     uint32_t   *pcrList;
@@ -88,7 +85,7 @@ static bool on_option(char key, char *value) {
 }
 
 /* Define possible command line parameters */
-bool tss2_tool_onstart(tpm2_options **opts) {
+static bool tss2_tool_onstart(tpm2_options **opts) {
     struct option topts[] = {
         {"pcrList"       , required_argument, NULL, 'x'},
         {"keyPath"        , required_argument, NULL, 'p'},
@@ -104,7 +101,7 @@ bool tss2_tool_onstart(tpm2_options **opts) {
 }
 
 /* Execute specific tool */
-int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
+static int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
     /* Check availability of required parameters */
     if (!ctx.pcrList) {
         fprintf (stderr, "No PCRs were chosen, use --pcrList\n");
@@ -147,7 +144,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_read_and_close (ctx.qualifyingData,
             (void*)&qualifyingData, &qualifyingDataSize);
         if (r) {
-          LOG_PERR ("open_read_and_close qualifyingData", r);
           free (ctx.pcrList);
           return 1;
         }
@@ -175,7 +171,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.quoteInfo, ctx.overwrite, quoteInfo,
             strlen(quoteInfo));
         if (r) {
-            LOG_PERR ("open_write_and_close quoteInfo", r);
             Fapi_Free (quoteInfo);
             Fapi_Free (pcrLog);
             Fapi_Free (signature);
@@ -190,7 +185,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.pcrLog, ctx.overwrite, pcrLog,
             strlen(pcrLog));
         if (r) {
-            LOG_PERR ("open_write_and_close pcrLog", r);
             Fapi_Free (pcrLog);
             Fapi_Free (signature);
             Fapi_Free (certificate);
@@ -203,7 +197,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.signature, ctx.overwrite, signature,
             signatureSize);
         if (r) {
-            LOG_PERR ("open_write_and_close signature", r);
             Fapi_Free (signature);
             Fapi_Free (certificate);
             return 1;
@@ -215,7 +208,6 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
         r = open_write_and_close (ctx.certificate, ctx.overwrite, certificate,
             strlen(certificate));
         if (r) {
-            LOG_PERR ("open_write_and_close certificate", r);
             Fapi_Free (certificate);
             return 1;
         }
@@ -224,3 +216,5 @@ int tss2_tool_onrun (FAPI_CONTEXT *fctx) {
 
     return 0;
 }
+
+TSS2_TOOL_REGISTER("quote", tss2_tool_onstart, tss2_tool_onrun, NULL)

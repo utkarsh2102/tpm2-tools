@@ -10,7 +10,7 @@ _tss2_getcertificate()
             return;;
         -!(-*)[o] | --x509certData)
             _filedir
-            COMPREPLY+=( '-' )
+            if [ x"$cur" = x ]; then COMPREPLY+=( '-' ); fi
             return;;
         -!(-*)[p] | --path)
             return;;
@@ -18,7 +18,7 @@ _tss2_getcertificate()
 
     $split && return
 
-    COMPREPLY=( $(compgen -W "-h --help -v --version --force -f -p --path --x509certData -o" -- "$cur") )
+    COMPREPLY=( $(compgen -W "-h --help -v --version --force -f -p --path= --x509certData= -o" -- "$cur") )
     [[ $COMPREPLY == *= ]] && compopt -o nospace
 } &&
 complete -F _tss2_getcertificate tss2_getcertificate

@@ -33,6 +33,57 @@ static const UINT32 MAGIC = 0xBADCC0DE;
         } \
     } while(0)
 
+/**
+ * Writes size bytes to a file, continuing on EINTR short writes.
+ * @param f
+ *  The file to write to.
+ * @param data
+ *  The data to write.
+ * @param size
+ *  The size, in bytes, of that data.
+ * @return
+ *  True on success, False otherwise.
+ */
+static bool writex(FILE *f, UINT8 *data, size_t size) {
+
+    size_t wrote = 0;
+    size_t index = 0;
+    do {
+        wrote = fwrite(&data[index], 1, size, f);
+        if (wrote != size) {
+            if (errno != EINTR) {
+                return false;
+            }
+            /* continue on EINTR */
+        }
+        size -= wrote;
+        index += wrote;
+    } while (size > 0);
+
+    return true;
+}
+
+/**
+ * Reads size bytes from a file, continuing on EINTR short reads.
+ * @param f
+ *  The file to read from.
+ * @param data
+ *  The data buffer to read into.
+ * @param size
+ *  The size of the buffer, which is also the amount of bytes to read.
+ * @return
+ *  The number of bytes that have been read.
+ */
+static size_t readx(FILE *f, UINT8 *data, size_t size) {
+
+    size_t bread = 0;
+    do {
+        bread += fread(&data[bread], 1, size-bread, f);
+    } while (bread < size && !feof(f) && errno == EINTR);
+
+    return bread;
+}
+
 bool files_get_file_size(FILE *fp, unsigned long *file_size, const char *path) {
 
     long current = ftell(fp);
@@ -78,6 +129,7 @@ bool files_get_file_size(FILE *fp, unsigned long *file_size, const char *path) {
 
 bool file_read_bytes_from_file(FILE *f, UINT8 *buf, UINT16 *size,
         const char *path) {
+
     unsigned long file_size;
     bool result = files_get_file_size(f, &file_size, path);
     if (!result) {
@@ -95,20 +147,24 @@ bool file_read_bytes_from_file(FILE *f, UINT8 *buf, UINT16 *size,
         return false;
     }
 
-    result = files_read_bytes(f, buf, file_size);
-    if (!result) {
+    /* The reported file size is not always correct, e.g. for sysfs files
+       generated on the fly by the kernel when they are read, which appear as
+       having size 0. Read as many bytes as we can until EOF is reached or the
+       provided buffer is full. As a small sanity check, fail if the number of
+       bytes read is smaller than the reported file size. */
+    *size = readx(f, buf, *size);
+    if (*size < file_size) {
         if (path) {
             LOG_ERR("Could not read data from file \"%s\"", path);
         }
         return false;
     }
 
-    *size = file_size;
-
     return true;
 }
 
 bool files_load_bytes_from_path(const char *path, UINT8 *buf, UINT16 *size) {
+
     if (!buf || !size || !path) {
         return false;
     }
@@ -464,66 +520,6 @@ bool files_get_file_size_path(const char *path, unsigned long *file_size) {
     return result;
 }
 
-/**
- * Writes size bytes to a file, continuing on EINTR short writes.
- * @param f
- *  The file to write to.
- * @param data
- *  The data to write.
- * @param size
- *  The size, in bytes, of that data.
- * @return
- *  True on success, False otherwise.
- */
-static bool writex(FILE *f, UINT8 *data, size_t size) {
-
-    size_t wrote = 0;
-    size_t index = 0;
-    do {
-        wrote = fwrite(&data[index], 1, size, f);
-        if (wrote != size) {
-            if (errno != EINTR) {
-                return false;
-            }
-            /* continue on EINTR */
-        }
-        size -= wrote;
-        index += wrote;
-    } while (size > 0);
-
-    return true;
-}
-
-/**
- * Reads size bytes from a file, continuing on EINTR short reads.
- * @param f
- *  The file to read from.
- * @param data
- *  The data buffer to read into.
- * @param size
- *  The size of the buffer, which is also the amount of bytes to read.
- * @return
- *  True on success, False otherwise.
- */
-static bool readx(FILE *f, UINT8 *data, size_t size) {
-
-    size_t bread = 0;
-    size_t index = 0;
-    do {
-        bread = fread(&data[index], 1, size, f);
-        if (bread != size) {
-            if (feof(f) || (errno != EINTR)) {
-                return false;
-            }
-            /* continue on EINTR */
-        }
-        size -= bread;
-        index += bread;
-    } while (size > 0);
-
-    return true;
-}
-
 #define BE_CONVERT(value, size) \
     do { \
         if (!tpm2_util_is_big_endian()) { \
@@ -542,7 +538,7 @@ static bool readx(FILE *f, UINT8 *data, size_t size) {
     bool files_read_##size(FILE *out, UINT##size *data) { \
 	    BAIL_ON_NULL("FILE", out); \
 	    BAIL_ON_NULL("data", data); \
-        bool res = readx(out, (UINT8 *)data, sizeof(*data)); \
+        bool res = (readx(out, (UINT8 *)data, sizeof(*data)) == sizeof(*data)); \
         if (res) { \
             BE_CONVERT(*data, size); \
         } \
@@ -565,7 +561,7 @@ bool files_read_bytes(FILE *out, UINT8 bytes[], size_t len) {
 
     BAIL_ON_NULL("FILE", out);
     BAIL_ON_NULL("bytes", bytes);
-    return readx(out, bytes, len);
+    return (readx(out, bytes, len) == len);
 }
 
 bool files_write_bytes(FILE *out, uint8_t bytes[], size_t len) {
@@ -693,14 +689,59 @@ tool_rc files_save_ESYS_TR(ESYS_CONTEXT *ectx, ESYS_TR handle, const char *path)
         return rc == TPM2_RC_SUCCESS; \
     }
 
+#define LOAD_TYPE_FILE(type, name) \
+    bool files_load_##name##_file(FILE *f, const char *path, type *name) { \
+    \
+        UINT8 buffer[sizeof(*name)]; \
+        UINT16 size = sizeof(buffer); \
+        bool res = file_read_bytes_from_file(f, buffer, &size, path); \
+        if (!res) { \
+            return false; \
+        } \
+        \
+        size_t offset = 0; \
+        TSS2_RC rc = Tss2_MU_##type##_Unmarshal(buffer, size, &offset, name); \
+        if (rc != TSS2_RC_SUCCESS) { \
+            LOG_ERR("Error deserializing "str(name)" structure: 0x%x", rc); \
+            LOG_ERR("The input file needs to be a valid "xstr(type)" data structure"); \
+            return false; \
+        } \
+        \
+        return rc == TPM2_RC_SUCCESS; \
+    }
+
+#define LOAD_TYPE_SILENT(type, name) \
+    bool files_load_##name##_silent(const char *path, type *name) { \
+    \
+        UINT8 buffer[sizeof(*name)]; \
+        UINT16 size = sizeof(buffer); \
+        bool res = files_load_bytes_from_path(path, buffer, &size); \
+        if (!res) { \
+            return false; \
+        } \
+        \
+        size_t offset = 0; \
+        TSS2_RC rc = Tss2_MU_##type##_Unmarshal(buffer, size, &offset, name); \
+        if (rc != TSS2_RC_SUCCESS) { \
+            return false; \
+        } \
+        \
+        return rc == TPM2_RC_SUCCESS; \
+    }
+
 SAVE_TYPE(TPM2B_PUBLIC, public)
 LOAD_TYPE(TPM2B_PUBLIC, public)
+LOAD_TYPE_FILE(TPM2B_PUBLIC, public)
+LOAD_TYPE_SILENT(TPM2B_PUBLIC, public)
 
 SAVE_TYPE(TPMT_PUBLIC, template)
 LOAD_TYPE(TPMT_PUBLIC, template)
+LOAD_TYPE_FILE(TPMT_PUBLIC, template)
+LOAD_TYPE_SILENT(TPMT_PUBLIC, template)
 
 SAVE_TYPE(TPMT_SIGNATURE, signature)
 LOAD_TYPE(TPMT_SIGNATURE, signature)
+LOAD_TYPE_SILENT(TPMT_SIGNATURE, signature)
 
 SAVE_TYPE(TPMT_TK_VERIFIED, ticket)
 LOAD_TYPE(TPMT_TK_VERIFIED, ticket)
@@ -729,6 +770,15 @@ LOAD_TYPE(TPM2B_PRIVATE, private)
 SAVE_TYPE(TPM2B_ENCRYPTED_SECRET, encrypted_seed)
 LOAD_TYPE(TPM2B_ENCRYPTED_SECRET, encrypted_seed)
 
+SAVE_TYPE(TPMS_ALGORITHM_DETAIL_ECC, ecc_details)
+
+SAVE_TYPE(TPM2B_ECC_POINT, ecc_point)
+LOAD_TYPE(TPM2B_ECC_POINT, ecc_point)
+
+LOAD_TYPE(TPM2B_ECC_PARAMETER, ecc_parameter)
+
+LOAD_TYPE_FILE(TPMS_ATTEST, attest)
+
 tool_rc files_tpm2b_attest_to_tpms_attest(TPM2B_ATTEST *quoted, TPMS_ATTEST *attest) {
 
     size_t offset = 0;
@@ -737,6 +787,89 @@ tool_rc files_tpm2b_attest_to_tpms_attest(TPM2B_ATTEST *quoted, TPMS_ATTEST *att
     if (rval != TSS2_RC_SUCCESS) {
         LOG_PERR(Tss2_MU_TPM2B_ATTEST_Unmarshal, rval);
         return tool_rc_from_tpm(rval);
+    }
+
+    return tool_rc_success;
+}
+
+tool_rc files_load_unique_data(const char *file_path,
+TPM2B_PUBLIC *public_data) {
+
+    /*
+     * TPM2_MAX_RSA_KEY_BYTES which expands to 512 bytes is the maximum unique
+     * size for RSA and other key types.
+     *
+     * Additionally this may still prove to be a bigger value than what has been
+     * implemented in a TPM. For example the value of MAX_RSA_KEY_BYTES is 256
+     * for ibmSimulator as specified in implementation.h
+     */
+    UINT16 unique_size = TPM2_MAX_RSA_KEY_BYTES;
+    uint8_t file_data[TPM2_MAX_RSA_KEY_BYTES];
+    bool result = files_load_bytes_from_buffer_or_file_or_stdin(NULL,
+    file_path, &unique_size, file_data);
+    if (!result) {
+        LOG_ERR("Failed to load unique data from file/ stdin.");
+        return tool_rc_general_error;
+    }
+
+    /*
+     * If the data is specified as a file, the user is responsible for ensuring
+     * that that this buffer is formatted as TPMU_PUBLIC_ID union.
+     */
+    if (file_path) {
+        memcpy(&public_data->publicArea.unique, file_data, unique_size);
+        return tool_rc_success;
+    }
+
+    /* Unstructured stdin unique data paired with a RSA object */
+    if (public_data->publicArea.type == TPM2_ALG_RSA) {
+        public_data->publicArea.unique.rsa.size = unique_size;
+        memcpy(&public_data->publicArea.unique.rsa.buffer, file_data,
+        unique_size);
+    }
+
+    /* Unstructured stdin unique data paired with an ECC object */
+    if (public_data->publicArea.type == TPM2_ALG_ECC) {
+        /* The size limitation is TPM implementation dependent. */
+        if((unique_size / 2) > TPM2_MAX_ECC_KEY_BYTES) {
+            LOG_ERR("Unique data too big for ECC object's allowed unique size");
+            return tool_rc_general_error;
+        }
+        /* Copy data into X and Y coordinates unique buffers */
+        public_data->publicArea.unique.ecc.x.size = (unique_size / 2);
+        memcpy(&public_data->publicArea.unique.ecc.x.buffer, file_data,
+        (unique_size / 2));
+        /* Copy the rest of buffer to y and also adjust size if input is odd */
+        public_data->publicArea.unique.ecc.y.size = (unique_size / 2) +
+        (unique_size % 2);
+        memcpy(&public_data->publicArea.unique.ecc.y.buffer,
+        file_data + (unique_size / 2), (unique_size / 2));
+    }
+
+    /* Unstructured stdin unique data paired with an Keyedhash object */
+    if (public_data->publicArea.type == TPM2_ALG_KEYEDHASH) {
+        /* The size limitation is TPM implementation dependent. */
+        if (unique_size > sizeof(TPMU_HA)) {
+            LOG_ERR("Unique data too big for keyedhash object's allowed unique "
+            "size.");
+            return tool_rc_general_error;
+        }
+        public_data->publicArea.unique.keyedHash.size = unique_size;
+        memcpy(&public_data->publicArea.unique.keyedHash.buffer, file_data,
+        unique_size);
+    }
+
+    /* Unstructured stdin unique data paired with an Symcipher object */
+    if (public_data->publicArea.type == TPM2_ALG_SYMCIPHER) {
+        /* The size limitation is TPM implementation dependent. */
+        if (unique_size > sizeof(TPMU_HA)) {
+            LOG_ERR("Unique data too big for TPM2_ALG_SYMCIPHER object's "
+                    "allowed unique size.");
+            return tool_rc_general_error;
+        }
+        public_data->publicArea.unique.sym.size = unique_size;
+        memcpy(&public_data->publicArea.unique.sym.buffer, file_data,
+        unique_size);
     }
 
     return tool_rc_success;

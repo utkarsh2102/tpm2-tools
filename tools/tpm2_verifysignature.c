@@ -6,6 +6,7 @@
 #include "log.h"
 #include "object.h"
 #include "tpm2.h"
+#include "tpm2_tool.h"
 #include "tpm2_alg_util.h"
 #include "tpm2_convert.h"
 #include "tpm2_hash.h"
@@ -39,7 +40,7 @@ struct tpm2_verifysig_ctx {
 static tpm2_verifysig_ctx ctx = {
         .format = TPM2_ALG_ERROR,
         .msg_hash = NULL,
-        .halg = TPM2_ALG_SHA1
+        .halg = TPM2_ALG_SHA256
 };
 
 static tool_rc verify_signature(ESYS_CONTEXT *context) {
@@ -201,7 +202,10 @@ static bool on_option(char key, char *value) {
         ctx.flags.digest = 1;
     }
         break;
-    case 'f': {
+    case 0:
+	LOG_WARN("Option \"--format\" is deprecated, use \"--scheme\"");
+        /* falls through */
+    case 'f':
         ctx.format = tpm2_alg_util_from_optarg(value, tpm2_alg_util_flags_sig);
         if (ctx.format == TPM2_ALG_ERROR) {
             LOG_ERR("Unknown signing scheme, got: \"%s\"", value);
@@ -209,7 +213,6 @@ static bool on_option(char key, char *value) {
         }
 
         ctx.flags.fmt = 1;
-    }
         break;
     case 's':
         ctx.sig_file_path = value;
@@ -225,13 +228,14 @@ static bool on_option(char key, char *value) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     const struct option topts[] = {
             { "digest",         required_argument, NULL, 'd' },
             { "hash-algorithm", required_argument, NULL, 'g' },
             { "message",        required_argument, NULL, 'm' },
-            { "format",         required_argument, NULL, 'f' },
+            { "format",         required_argument, NULL,  0  },
+            { "scheme",         required_argument, NULL, 'f' },
             { "signature",      required_argument, NULL, 's' },
             { "ticket",         required_argument, NULL, 't' },
             { "key-context",    required_argument, NULL, 'c' },
@@ -244,7 +248,7 @@ bool tpm2_tool_onstart(tpm2_options **opts) {
     return *opts != NULL;
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *context, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *context, tpm2_option_flags flags) {
 
     UNUSED(flags);
 
@@ -263,8 +267,11 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *context, tpm2_option_flags flags) {
     return tool_rc_success;
 }
 
-void tpm2_tool_onexit(void) {
+static void tpm2_tool_onexit(void) {
     if (ctx.msg_hash) {
         free(ctx.msg_hash);
     }
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("verifysignature", tpm2_tool_onstart, tpm2_tool_onrun, NULL, tpm2_tool_onexit)

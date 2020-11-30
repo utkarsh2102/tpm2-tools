@@ -10,7 +10,7 @@ _tss2_verifyquote()
             return;;
         -!(-*)[Qilq] | --qualifyingData | --signature | --pcrLog | --quoteInfo)
             _filedir
-            COMPREPLY+=( '-' )
+            if [ x"$cur" = x ]; then COMPREPLY+=( '-' ); fi
             return;;
         -!(-*)[k] | --publicKeyPath)
             return;;
@@ -18,7 +18,7 @@ _tss2_verifyquote()
 
     $split && return
 
-    COMPREPLY=( $(compgen -W "-h --help -v --version --qualifyingData -Q --pcrLog -l --quoteInfo -q --publicKeyPath -k --signature -i" -- "$cur") )
+    COMPREPLY=( $(compgen -W "-h --help -v --version --qualifyingData= -Q --pcrLog= -l --quoteInfo= -q --publicKeyPath= -k --signature= -i" -- "$cur") )
     [[ $COMPREPLY == *= ]] && compopt -o nospace
 } &&
 complete -F _tss2_verifyquote tss2_verifyquote

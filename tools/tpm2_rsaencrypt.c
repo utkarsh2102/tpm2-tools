@@ -7,6 +7,7 @@
 #include "log.h"
 #include "object.h"
 #include "tpm2.h"
+#include "tpm2_tool.h"
 #include "tpm2_alg_util.h"
 #include "tpm2_options.h"
 
@@ -67,6 +68,8 @@ static bool on_option(char key, char *value) {
         if (ctx.scheme.scheme == TPM2_ALG_ERROR) {
             return false;
         }
+        ctx.scheme.details.oaep.hashAlg = ctx.scheme.scheme == TPM2_ALG_OAEP ?
+            TPM2_ALG_SHA256 : 0;
         break;
     case 'l':
         return tpm2_util_get_label(value, &ctx.label);
@@ -86,7 +89,7 @@ static bool on_args(int argc, char **argv) {
     return true;
 }
 
-bool tpm2_tool_onstart(tpm2_options **opts) {
+static bool tpm2_tool_onstart(tpm2_options **opts) {
 
     static const struct option topts[] = {
       {"output",      required_argument, NULL, 'o'},
@@ -119,7 +122,7 @@ static tool_rc init(ESYS_CONTEXT *context) {
             TPM2_HANDLE_ALL_W_NV);
 }
 
-tool_rc tpm2_tool_onrun(ESYS_CONTEXT *context, tpm2_option_flags flags) {
+static tool_rc tpm2_tool_onrun(ESYS_CONTEXT *context, tpm2_option_flags flags) {
 
     UNUSED(flags);
 
@@ -130,3 +133,6 @@ tool_rc tpm2_tool_onrun(ESYS_CONTEXT *context, tpm2_option_flags flags) {
 
     return rsa_encrypt_and_save(context);
 }
+
+// Register this tool with tpm2_tool.c
+TPM2_TOOL_REGISTER("rsaencrypt", tpm2_tool_onstart, tpm2_tool_onrun, NULL, NULL)

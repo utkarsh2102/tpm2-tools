@@ -10,6 +10,8 @@
 
 **tss2_getcertificate** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
 **tss2_getcertificate**(1) - This command returns the PEM encoded X.509 certificate associated with the key at path.
@@ -22,11 +24,11 @@ These are the available options:
 
     Force overwriting the output file.
 
-  * **-p**, **\--path** _STRING_:
+  * **-p**, **\--path**=_STRING_:
 
     The entity whose certificate is requested.
 
-  * **-o**, **\--x509certData** _FILENAME_ or _-_ (for stdout):
+  * **-o**, **\--x509certData**=_FILENAME_ or _-_ (for stdout):
 
     Returns the PEM encoded certificate. If no certificate is stored, then an empty string is returned.
 
@@ -34,7 +36,7 @@ These are the available options:
 
 # EXAMPLE
 ```
-tss2_getcertificate --path HS/SRK/myRSACrypt --x509certData x509certData.file
+tss2_getcertificate --path=HS/SRK/myRSACrypt --x509certData=x509certData.file
 ```
 
 # RETURNS

@@ -10,6 +10,8 @@
 
 **tss2_import** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
 **tss2_import**(1) - This command imports a JSON encoded policy or policy
@@ -20,11 +22,11 @@ under the provided path.
 
 These are the available options:
 
-  * **-p**, **\--path** _STRING_:
+  * **-p**, **\--path**=_STRING_:
 
     The path of the new object.
 
-  * **-i**, **\--importData** _FILENAME_ or _-_ (for stdin):
+  * **-i**, **\--importData**=_FILENAME_ or _-_ (for stdin):
 
     The data to be imported.
 
@@ -32,10 +34,10 @@ These are the available options:
 
 # EXAMPLE
 ```
-tss2_import --path /policy/duplicate-policy --importData importData.json
+tss2_import --path=/policy/duplicate-policy --importData=importData.json
 ```
 ```
-tss2_import --path /ext/key --importData importData.file
+tss2_import --path=/ext/key --importData=importData.file
 ```
 
 # RETURNS

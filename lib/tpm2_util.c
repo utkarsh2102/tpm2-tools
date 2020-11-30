@@ -248,36 +248,6 @@ void tpm2_util_hexdump(const BYTE *data, size_t len) {
     tpm2_util_hexdump2(stdout, data, len);
 }
 
-bool tpm2_util_hexdump_file(FILE *fd, size_t len) {
-    BYTE* buff = (BYTE*) malloc(len);
-    if (!buff) {
-        LOG_ERR("malloc() failed");
-        return false;
-    }
-
-    bool res = files_read_bytes(fd, buff, len);
-    if (!res) {
-        LOG_ERR("Failed to read file");
-        free(buff);
-        return false;
-    }
-
-    tpm2_util_hexdump(buff, len);
-
-    free(buff);
-    return true;
-}
-
-bool tpm2_util_print_tpm2b_file(FILE *fd) {
-    UINT16 len;
-    bool res = files_read_16(fd, &len);
-    if (!res) {
-        LOG_ERR("File read failed");
-        return false;
-    }
-    return tpm2_util_hexdump_file(fd, len);
-}
-
 bool tpm2_util_is_big_endian(void) {
 
     uint32_t test_word;
@@ -368,39 +338,39 @@ struct tpm2_util_keydata {
     } entries[2];
 };
 
-static void tpm2_util_public_to_keydata(TPM2B_PUBLIC *public,
+static void tpm2_util_public_to_keydata(TPMT_PUBLIC *public,
         tpm2_util_keydata *keydata) {
 
-    switch (public->publicArea.type) {
+    switch (public->type) {
     case TPM2_ALG_RSA:
         keydata->len = 1;
         keydata->entries[0].name = tpm2_alg_util_algtostr(
-            public->publicArea.type, tpm2_alg_util_flags_any);
-        keydata->entries[0].value = (TPM2B *) &public->publicArea.unique.rsa;
+            public->type, tpm2_alg_util_flags_any);
+        keydata->entries[0].value = (TPM2B *) &public->unique.rsa;
         return;
     case TPM2_ALG_KEYEDHASH:
         keydata->len = 1;
         keydata->entries[0].name = tpm2_alg_util_algtostr(
-            public->publicArea.type, tpm2_alg_util_flags_any);
+            public->type, tpm2_alg_util_flags_any);
         keydata->entries[0].value =
-                (TPM2B *) &public->publicArea.unique.keyedHash;
+                (TPM2B *) &public->unique.keyedHash;
         return;
     case TPM2_ALG_SYMCIPHER:
         keydata->len = 1;
         keydata->entries[0].name = tpm2_alg_util_algtostr(
-            public->publicArea.type, tpm2_alg_util_flags_any);
-        keydata->entries[0].value = (TPM2B *) &public->publicArea.unique.sym;
+            public->type, tpm2_alg_util_flags_any);
+        keydata->entries[0].value = (TPM2B *) &public->unique.sym;
         return;
     case TPM2_ALG_ECC:
         keydata->len = 2;
         keydata->entries[0].name = "x";
-        keydata->entries[0].value = (TPM2B *) &public->publicArea.unique.ecc.x;
+        keydata->entries[0].value = (TPM2B *) &public->unique.ecc.x;
         keydata->entries[1].name = "y";
-        keydata->entries[1].value = (TPM2B *) &public->publicArea.unique.ecc.y;
+        keydata->entries[1].value = (TPM2B *) &public->unique.ecc.y;
         return;
     default:
         LOG_WARN("The algorithm type(0x%4.4x) is not supported",
-            public->publicArea.type);
+            public->type);
     }
 
     return;
@@ -484,7 +454,7 @@ static void print_kdf_scheme(TPMT_KDF_SCHEME *kdf, const char *indent) {
     print_alg_raw("kdfa-halg", kdf->details.mgf1.hashAlg, indent);
 }
 
-void tpm2_util_public_to_yaml(TPM2B_PUBLIC *public, char *indent) {
+void tpm2_util_tpmt_public_to_yaml(TPMT_PUBLIC *public, char *indent) {
 
     if (!indent) {
         indent = "";
@@ -492,26 +462,26 @@ void tpm2_util_public_to_yaml(TPM2B_PUBLIC *public, char *indent) {
 
     tpm2_tool_output("%sname-alg:\n", indent);
     tpm2_tool_output("%s  value: %s\n", indent,
-            tpm2_alg_util_algtostr(public->publicArea.nameAlg,
+            tpm2_alg_util_algtostr(public->nameAlg,
                     tpm2_alg_util_flags_any));
-    tpm2_tool_output("%s  raw: 0x%x\n", indent, public->publicArea.nameAlg);
+    tpm2_tool_output("%s  raw: 0x%x\n", indent, public->nameAlg);
 
-    tpm2_util_tpma_object_to_yaml(public->publicArea.objectAttributes, indent);
+    tpm2_util_tpma_object_to_yaml(public->objectAttributes, indent);
 
     tpm2_tool_output("%stype:\n", indent);
     tpm2_tool_output("%s  value: %s\n", indent,
-            tpm2_alg_util_algtostr(public->publicArea.type,
+            tpm2_alg_util_algtostr(public->type,
                     tpm2_alg_util_flags_any));
-    tpm2_tool_output("%s  raw: 0x%x\n", indent, public->publicArea.type);
+    tpm2_tool_output("%s  raw: 0x%x\n", indent, public->type);
 
-    switch (public->publicArea.type) {
+    switch (public->type) {
     case TPM2_ALG_SYMCIPHER: {
-        TPMS_SYMCIPHER_PARMS *s = &public->publicArea.parameters.symDetail;
+        TPMS_SYMCIPHER_PARMS *s = &public->parameters.symDetail;
         print_sym(&s->sym, indent);
     }
         break;
     case TPM2_ALG_KEYEDHASH: {
-        TPMS_KEYEDHASH_PARMS *k = &public->publicArea.parameters.keyedHashDetail;
+        TPMS_KEYEDHASH_PARMS *k = &public->parameters.keyedHashDetail;
         tpm2_tool_output("%salgorithm: \n", indent);
         tpm2_tool_output("%s  value: %s\n", indent,
                 tpm2_alg_util_algtostr(k->scheme.scheme,
@@ -545,8 +515,8 @@ void tpm2_util_public_to_yaml(TPM2B_PUBLIC *public, char *indent) {
     }
         break;
     case TPM2_ALG_RSA: {
-        TPMS_RSA_PARMS *r = &public->publicArea.parameters.rsaDetail;
-        tpm2_tool_output("%sexponent: 0x%x\n", indent, r->exponent);
+        TPMS_RSA_PARMS *r = &public->parameters.rsaDetail;
+        tpm2_tool_output("%sexponent: %u\n", indent, r->exponent ? r->exponent : 65537);
         tpm2_tool_output("%sbits: %u\n", indent, r->keyBits);
 
         print_rsa_scheme(&r->scheme, indent);
@@ -555,7 +525,7 @@ void tpm2_util_public_to_yaml(TPM2B_PUBLIC *public, char *indent) {
     }
         break;
     case TPM2_ALG_ECC: {
-        TPMS_ECC_PARMS *e = &public->publicArea.parameters.eccDetail;
+        TPMS_ECC_PARMS *e = &public->parameters.eccDetail;
 
         tpm2_tool_output("%scurve-id:\n", indent);
         tpm2_tool_output("%s  value: %s\n", indent,
@@ -583,12 +553,17 @@ void tpm2_util_public_to_yaml(TPM2B_PUBLIC *public, char *indent) {
         tpm2_tool_output("%s\n", indent);
     }
 
-    if (public->publicArea.authPolicy.size) {
+    if (public->authPolicy.size) {
         tpm2_tool_output("%sauthorization policy: ", indent);
-        tpm2_util_hexdump(public->publicArea.authPolicy.buffer,
-            public->publicArea.authPolicy.size);
+        tpm2_util_hexdump(public->authPolicy.buffer,
+            public->authPolicy.size);
         tpm2_tool_output("%s\n", indent);
     }
+}
+
+void tpm2_util_public_to_yaml(TPM2B_PUBLIC *public, char *indent) {
+
+    tpm2_util_tpmt_public_to_yaml(&public->publicArea, indent);
 }
 
 bool tpm2_util_calc_unique(TPMI_ALG_HASH name_alg,
@@ -643,31 +618,6 @@ tool_rc tpm2_util_sys_handle_to_esys_handle(ESYS_CONTEXT *context,
 
     return tpm2_from_tpm_public(context, sys_handle, ESYS_TR_NONE, ESYS_TR_NONE,
             ESYS_TR_NONE, esys_handle);
-}
-
-tool_rc tpm2_util_esys_handle_to_sys_handle(ESYS_CONTEXT *context,
-        ESYS_TR esys_handle, TPM2_HANDLE *sys_handle) {
-
-    TPM2B_NAME *loaded_name = NULL;
-    tool_rc rc = tpm2_tr_get_name(context, esys_handle, &loaded_name);
-    if (rc != tool_rc_success) {
-        return rc;
-    }
-
-    size_t offset = 0;
-    TPM2_HANDLE hndl;
-    // TODO: this doesn't produce handles that _look_ right
-    rc = tpm2_mu_tpm2_handle_unmarshal(loaded_name->name, loaded_name->size,
-            &offset, &hndl);
-    if (rc != tool_rc_success) {
-        goto outname;
-    }
-
-    *sys_handle = hndl;
-
-    outname: free(loaded_name);
-
-    return rc;
 }
 
 char *tpm2_util_getenv(const char *name) {
@@ -986,4 +936,60 @@ void tpm2_util_print_time(const TPMS_TIME_INFO *current_time) {
 
     tpm2_tool_output("  safe: %s\n",
             current_time->clockInfo.safe ? "yes" : "no");
+}
+
+bool tpm2_calq_qname(TPM2B_NAME *pqname,
+        TPMI_ALG_HASH halg, TPM2B_NAME *name, TPM2B_NAME *qname) {
+
+    // QNB ≔ HB (QNA || NAMEB)
+    bool result = false;
+
+    const EVP_MD *md = tpm2_openssl_halg_from_tpmhalg(halg);
+
+    EVP_MD_CTX *mdctx = EVP_MD_CTX_create();
+    if (!mdctx) {
+        LOG_ERR("%s", tpm2_openssl_get_err());
+        return false;
+    }
+
+    int rc = EVP_DigestInit_ex(mdctx, md, NULL);
+    if (!rc) {
+        LOG_ERR("%s", tpm2_openssl_get_err());
+        goto out;
+    }
+
+    size_t offset = sizeof(halg);
+    rc = EVP_DigestUpdate(mdctx, pqname->name, pqname->size);
+    if (!rc) {
+        LOG_ERR("%s", tpm2_openssl_get_err());
+        goto out;
+    }
+
+    rc = EVP_DigestUpdate(mdctx, name->name, name->size);
+    if (!rc) {
+        LOG_ERR("%s", tpm2_openssl_get_err());
+        goto out;
+    }
+
+    unsigned size = EVP_MD_size(md);
+    rc = EVP_DigestFinal_ex(mdctx, &qname->name[offset], &size);
+    if (!rc) {
+        LOG_ERR("%s", tpm2_openssl_get_err());
+        goto out;
+    }
+
+    /* hash sizes are not bigger than 16 bits, safe truncate */
+    qname->size = (UINT16)size;
+
+    /* put the hash alg on the front, since name already has it in marshalled
+     * proper form just use it.
+     */
+    memcpy(qname->name, name->name, offset);
+    qname->size += offset;
+
+    result = true;
+
+out:
+    EVP_MD_CTX_destroy(mdctx);
+    return result;
 }

@@ -169,6 +169,17 @@ bool files_save_public(TPM2B_PUBLIC *public, const char *path);
 bool files_save_template(TPMT_PUBLIC *template, const char *path);
 
 /**
+ * Like files_load_template(), but doesn't report errors.
+ * @param path
+ *  The path containing the TPMT_PUBLIC to load from.
+ * @param public
+ *  The destination for the TPMT_PUBLIC.
+ * @return
+ *  true on success, false otherwise.
+ */
+bool files_load_template_silent(const char *path, TPMT_PUBLIC *public);
+
+/**
  * Loads a TPM2B_PUBLIC from disk that was saved with files_save_pubkey()
  * @param path
  *  The path to load from.
@@ -178,6 +189,32 @@ bool files_save_template(TPMT_PUBLIC *template, const char *path);
  *  true on success, false on error.
  */
 bool files_load_public(const char *path, TPM2B_PUBLIC *public);
+
+/**
+ * Like files_load_public(), but doesn't report errors.
+ * @param path
+ *  The path containing the TP2B_PUBLIC to load from.
+ * @param public
+ *  The destination for the TP2B_PUBLIC.
+ * @return
+ *  true on success, false otherwise.
+ */
+bool files_load_public_file(FILE *f, const char *path, TPM2B_PUBLIC *public);
+
+bool files_load_template(const char *path, TPMT_PUBLIC *public);
+
+bool files_load_template_file(FILE *f, const char *path, TPMT_PUBLIC *public);
+
+/**
+ * Like files_load_public(), but doesn't report errors.
+ * @param path
+ *  The path containing the TP2B_PUBLIC to load from.
+ * @param public
+ *  The destination for the TP2B_PUBLIC.
+ * @return
+ *  true on success, false otherwise.
+ */
+bool files_load_public_silent(const char *path, TPM2B_PUBLIC *public);
 
 /**
  * Serializes a TPMT_SIGNATURE to the file path provided.
@@ -200,6 +237,18 @@ bool files_save_signature(TPMT_SIGNATURE *signature, const char *path);
  *  true on success, false on error.
  */
 bool files_load_signature(const char *path, TPMT_SIGNATURE *signature);
+
+/**
+ * Like files_save)signature() but doesn't complain about libmu failures.
+ * Useful if you're trying to probe if its a plain or tss format signature.
+ * @param path
+ *  The path to load from.
+ * @param signature
+ *  The TPMT_SIGNATURE to load.
+ * @return
+ *  true on success, false on error.
+ */
+bool files_load_signature_silent(const char *path, TPMT_SIGNATURE *signature);
 
 /**
  * Serializes a TPMT_TK_VERIFIED to the file path provided.
@@ -342,6 +391,35 @@ bool files_save_encrypted_seed(TPM2B_ENCRYPTED_SECRET *encrypted_seed,
         const char *path);
 
 /**
+ * Serializes a TPM2B_ECC_POINT to the file path provided.
+ * @param Q
+ *  The TPM2B_ECC_POINT to save to disk.
+ * @param path
+ *  The path to save to.
+ * @return
+ *  true on success, false on error.
+ */
+bool files_save_ecc_point(TPM2B_ECC_POINT *Q, const char *path);
+
+/**
+ * Loads a TPM2B_ECC_POINT from disk.
+ * @param path
+ *  The path to load from.
+ * @param Q
+ *  The TPM2B_ECC_POINT data to load.
+ */
+bool files_load_ecc_point(const char *path, TPM2B_ECC_POINT *Q);
+
+/**
+ * Loads a TPM2B_ECC_PARAMETER from disk
+ * @param path
+ *  The path to load from.
+ * @param parameter
+ *  The TPM2B_ECC_PARAMETER data to load.
+ */
+bool files_load_ecc_parameter(const char *path, TPM2B_ECC_PARAMETER *parameter);
+
+/**
  * Loads a TPM2B_ENCRYPTED_SECRET from disk.
  * @param encrypted_seed
  *  The path to load from.
@@ -352,6 +430,18 @@ bool files_save_encrypted_seed(TPM2B_ENCRYPTED_SECRET *encrypted_seed,
  */
 bool files_load_encrypted_seed(const char *path,
         TPM2B_ENCRYPTED_SECRET *encrypted_seed);
+
+/**
+ * Serializes a TPMS_ALGORITHM_DETAIL_ECC to the file path provided.
+ * @param parameters
+ *  The TPMS_ALGORITHM_DETAIL_ECC to save to disk.
+ * @param path
+ *  The path to save to.
+ * @return
+ *  true on success, false on error.
+ */
+bool files_save_ecc_details(TPMS_ALGORITHM_DETAIL_ECC *parameters,
+    const char *path);
 
 /**
  * Checks a file for existence.
@@ -491,5 +581,36 @@ bool files_read_bytes(FILE *out, UINT8 data[], size_t size);
  *  tool_rc_success on success, false otherwise.
  */
 tool_rc files_tpm2b_attest_to_tpms_attest(TPM2B_ATTEST *quoted, TPMS_ATTEST *attest);
+
+/**
+ * Loads a TPMS_ATTEST from disk.
+ * @param f
+ *  The file to load.
+ * @param path
+ *  The path to load from.
+ * @param attest
+ *  The attest structure to fill up.
+ * @return
+ *  True on success, false otherwise.
+ */
+bool files_load_attest_file(FILE *f, const char *path, TPMS_ATTEST *attest);
+
+/**
+ * @brief
+ * Parse the key type and load the unique data in the object's
+ * TPM2B_PUBLIC area.
+ *
+ * @param file_path
+ * The file to read the unique data from. This can be NULL to indicate stdin
+ * @param public_data
+ * The TPM2B public structure to parse the object type and also to update the
+ * unique data as read from the file or stdin.
+ *
+ * @return
+ * tool_rc type signaling the status at the end of read attempt.
+ *
+ */
+tool_rc files_load_unique_data(const char *file_path,
+TPM2B_PUBLIC *public_data);
 
 #endif /* FILES_H */

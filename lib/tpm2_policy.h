@@ -28,7 +28,7 @@
  */
 tool_rc tpm2_policy_build_pcr(ESYS_CONTEXT *context,
         tpm2_session *policy_session, const char *raw_pcrs_file,
-        TPML_PCR_SELECTION *pcr_selections);
+        TPML_PCR_SELECTION *pcr_selections, TPM2B_DIGEST *raw_pcr_digest);
 
 /**
  * Enables a signing authority to authorize policies
@@ -195,7 +195,8 @@ tool_rc tpm2_policy_build_policysigned(ESYS_CONTEXT *ectx,
         tpm2_session *policy_session, tpm2_loaded_object *auth_entity_obj,
         TPMT_SIGNATURE *signature, INT32 expiration, TPM2B_TIMEOUT **timeout,
         TPMT_TK_AUTH **policy_ticket, const char *policy_qualifier_path,
-        bool is_nonce_tpm, const char *raw_data_path);
+        bool is_nonce_tpm, const char *raw_data_path,
+        const char *cphash_path);
 
 /**
  * PolicyTicket assertion enables proxy authentication for either PolicySecret

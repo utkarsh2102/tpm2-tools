@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
+if [ `uname` == "FreeBSD" ]; then
+        exit 77
+fi
+
 source helpers.sh
 
 cleanup() {
@@ -37,20 +41,19 @@ bc3e1d4084e835c7c8906a1c05b4d2d30fdbebc1dbad950fa6b165bd4b6a
 525118bd4470b18180eef78ae4267bcd" | xxd -r -p > test_rsa_ek.pub
 
 # Get ek certificate and output to file
-tpm2_getekcertificate -u test_rsa_ek.pub -x -X -o rsa_ek_cert.bin
+tpm2 getekcertificate -u test_rsa_ek.pub -x -X -o rsa_ek_cert.bin
 
 # Test that stdoutput is the same
-tpm2_getekcertificate -u test_rsa_ek.pub -x -X > stdout_rsa_ek_cert.bin
+tpm2 getekcertificate -u test_rsa_ek.pub -x -X > stdout_rsa_ek_cert.bin
 
 # stdout file should match
 cmp rsa_ek_cert.bin stdout_rsa_ek_cert.bin
 
 # Retrieved certificate should be valid
-if [ "$(md5sum rsa_ek_cert.bin| awk '{ print $1 }')" != \
-"56af9eb8a271bbf7ac41b780acd91ff5" ]; then
- echo "Failed: retrieving RSA endorsement key certificate"
- exit 1
-fi
+tpm2 loadexternal -C e  -u test_rsa_ek.pub -c rsa_key.ctx
+tpm2 readpublic -c rsa_key.ctx -f pem -o test_rsa_ek.pem
+openssl x509 -pubkey -in rsa_ek_cert.bin -noout -out test_ek.pem
+diff test_rsa_ek.pem test_ek.pem
 
 # Sample ECC ek public from a real platform
 echo "007a0023000b000300b20020837197674484b3f81a90cc8d46a5d724fd52
@@ -60,19 +63,79 @@ d76e06520b64f2a1da1b331469aa00060080004300100003001000206d8e
 51fe0853" | xxd -r -p > test_ecc_ek.pub
 
 # Get ecc certificate and output to file
-tpm2_getekcertificate -u test_ecc_ek.pub -x -X -o ecc_ek_cert.bin
+tpm2 getekcertificate -u test_ecc_ek.pub -x -X -o ecc_ek_cert.bin
 
 # Test that stdoutput is the same
-tpm2_getekcertificate -u test_ecc_ek.pub -x -X > stdout_ecc_ek_cert.bin
+tpm2 getekcertificate -u test_ecc_ek.pub -x -X > stdout_ecc_ek_cert.bin
 
 # stdout file should match
 cmp ecc_ek_cert.bin stdout_ecc_ek_cert.bin
 
 # Retrieved certificate should be valid
-if [ "$(md5sum ecc_ek_cert.bin| awk '{ print $1 }')" != \
-"48a7fdb9ad2eec6a71f67092c54770f9" ]; then
- echo "Failed: retrieving ecc endorsement key certificate"
- exit 1
-fi
+tpm2 loadexternal -C e  -u test_ecc_ek.pub -c ecc_key.ctx
+tpm2 readpublic -c ecc_key.ctx -f pem -o test_ecc_ek.pem
+openssl x509 -pubkey -in ecc_ek_cert.bin -noout -out test_ek.pem
+diff test_ecc_ek.pem test_ek.pem
+
+# Retrieve EK certificates from NV indices
+RSA_EK_CERT_NV_INDEX=0x01C00002
+ECC_EK_CERT_NV_INDEX=0x01C0000A
+
+define_ek_cert_nv_index() {
+    file_size=`ls -l $1 | awk {'print $5'}`
+
+    tpm2 nvdefine $2 -C p -s $file_size \
+    -a 'ppwrite|ppread|ownerread|authread|no_da|platformcreate'
+
+    tpm2 nvwrite -C p -i $1 $2
+}
+
+## ECC only INTC certificate from NV index
+tpm2 getekcertificate -u test_ecc_ek.pub -x -X -o ecc_ek_cert.bin --raw
+
+define_ek_cert_nv_index ecc_ek_cert.bin $ECC_EK_CERT_NV_INDEX
+
+tpm2 getekcertificate -o nv_ecc_ek_cert.pem
+
+sed 's/-/+/g;s/_/\//g;s/%3D/=/g;s/^{.*certificate":"//g;s/"}$//g;' \
+ecc_ek_cert.bin | base64 --decode > ecc_test.der
+
+openssl x509 -inform PEM -outform DER  -in nv_ecc_ek_cert.pem \
+-out nv_ecc_ek_cert.der
+
+diff nv_ecc_ek_cert.der ecc_test.der
+
+## RSA only INTC certificate from NV index
+tpm2 nvundefine -C p $ECC_EK_CERT_NV_INDEX
+
+tpm2 getekcertificate -u test_rsa_ek.pub -x -X -o rsa_ek_cert.bin --raw
+
+define_ek_cert_nv_index rsa_ek_cert.bin $RSA_EK_CERT_NV_INDEX
+
+tpm2 getekcertificate -o nv_rsa_ek_cert.pem
+
+sed 's/-/+/g;s/_/\//g;s/%3D/=/g;s/^{.*certificate":"//g;s/"}$//g;' \
+rsa_ek_cert.bin | base64 --decode > rsa_test.der
+
+openssl x509 -inform PEM -outform DER  -in nv_rsa_ek_cert.pem \
+-out nv_rsa_ek_cert.der
+
+diff nv_rsa_ek_cert.der rsa_test.der
+
+## RSA & ECC INTC certificates from NV index
+
+define_ek_cert_nv_index ecc_ek_cert.bin $ECC_EK_CERT_NV_INDEX
+
+tpm2 getekcertificate -o nv_rsa_ek_cert.pem -o nv_ecc_ek_cert.pem
+
+openssl x509 -inform PEM -outform DER  -in nv_ecc_ek_cert.pem \
+-out nv_ecc_ek_cert.der
+
+openssl x509 -inform PEM -outform DER  -in nv_rsa_ek_cert.pem \
+-out nv_rsa_ek_cert.der
+
+diff nv_ecc_ek_cert.der ecc_test.der
+
+diff nv_rsa_ek_cert.der rsa_test.der
 
 exit 0

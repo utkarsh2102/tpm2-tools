@@ -10,6 +10,8 @@
 
 **tss2_getappdata** [*OPTIONS*]
 
+[common fapi references](common/tss2-fapi-references.md)
+
 # DESCRIPTION
 
 **tss2_getappdata**(1) - This command returns the previously stored application data for an object.
@@ -18,11 +20,15 @@
 
 These are the available options:
 
-  * **-p**, **\--path** _STRING_:
+  * **-f**, **\--force**:
 
-    Path of the object for which the appData will be loaded.
+    Force overwriting the output file.
 
-  * **-o**, **\--appData** _FILENAME_ or _-_ (for stdout):
+  * **-p**, **\--path**=_STRING_:
+
+    Path of the object for which the application data will be loaded.
+
+  * **-o**, **\--appData**=_FILENAME_ or _-_ (for stdout):
 
     Returns a copy of the stored data. Optional parameter.
 
@@ -30,7 +36,7 @@ These are the available options:
 
 # EXAMPLE
 ```
-tss2_getappdata --path HS/SRK/myRSACrypt --appData appData.file
+tss2_getappdata --path=HS/SRK/myRSACrypt --appData=appData.file
 ```
 
 # RETURNS
