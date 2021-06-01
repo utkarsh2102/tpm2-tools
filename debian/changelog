@@ -1,3 +1,11 @@
+tpm2-tools (5.0-2) unstable; urgency=low
+
+  * Add debian/patches/0001-tpm2_import-fix-fixed-AES-key-CVE-2021-3565.patch
+    - Fix CVE-2021-3565 (Closes: #989148)
+    - This patch fixes the fixed AES key issue in tpm2_import command
+
+ -- Ying-Chun Liu (PaulLiu) <paulliu@debian.org>  Wed, 02 Jun 2021 04:00:26 +0800
+
 tpm2-tools (5.0-1) unstable; urgency=low
 
   * New upstream release.
