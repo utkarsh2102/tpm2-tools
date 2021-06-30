@@ -31,6 +31,12 @@ uses the first free index. The tool outputs the nv index defined on success.
     Specifies the size of data area in bytes. Defaults to **MAX_NV_INDEX_SIZE**
     which is typically 2048.
 
+  * **-g**, **\--hash-algorithm**=_ALGORITHM_:
+
+    The hash algorithm used to compute the name of the Index and used for the
+    authorization policy. If the index is an extend index, the hash algorithm is
+    used for the extend.
+
   * **-a**, **\--attributes**=_ATTRIBUTES_
 
     Specifies the attribute values for the nv region used when creating the
@@ -74,7 +80,18 @@ uses the first free index. The tool outputs the nv index defined on success.
 
     File path to record the hash of the command parameters. This is commonly
     termed as cpHash. NOTE: When this option is selected, The tool will not
-    actually execute the command, it simply returns a cpHash.
+    actually execute the command, it simply returns a cpHash, unless rphash is also required.
+
+  * **\--rphash**=_FILE_
+
+    File path to record the hash of the response parameters. This is commonly
+    termed as rpHash.
+
+  * **-S**, **\--session**=_FILE_:
+
+    The session created using **tpm2_startauthsession**. Multiple of these can
+    be specified. For example, you can have one session for auditing and another
+    for encryption/decryption of the parameters.
 
   * **ARGUMENT** the command line argument specifies the NV index or offset
     number.

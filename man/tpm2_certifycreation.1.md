@@ -67,7 +67,18 @@ created with either **TPM2_CreatePrimary** or **TPM2_Create** commands.
 
     File path to record the hash of the command parameters. This is commonly
     termed as cpHash. NOTE: When this option is selected, The tool will not
-    actually execute the command, it simply returns a cpHash.
+    actually execute the command, it simply returns a cpHash, unless rphash is also required.
+
+  * **\--rphash**=_FILE_
+
+    File path to record the hash of the response parameters. This is commonly
+    termed as rpHash.
+
+  * **-S**, **\--session**=_FILE_:
+
+    The session created using **tpm2_startauthsession**. This can be used to
+    specify an auxiliary session for auditing and or encryption/decryption of
+    the parameters.
 
 ## References
 

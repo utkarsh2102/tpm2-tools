@@ -10,10 +10,10 @@
 
 # DESCRIPTION
 
-**tpm2_startauthsession**(1) - Starts a session with the TPM. The default is
-to start a *trial* session unless the **-a** option is specified.
-Saves the policy session data to a file. This file can then be used in subsequent
-tools that can use a policy file for authorization or policy events.
+**tpm2_startauthsession**(1) - Starts a session with the TPM. The default is to
+start a *trial* session unless the **-a** option is specified. Saves the policy
+session data to a file. This file can then be used in subsequent tools that can
+use a policy file for authorization or policy events.
 
 This will not work with resource managers (RMs) outside of [tpm2-abrmd](https://
 github.com/tpm2-software/tpm2-abrmd), as most RMs will flush session handles
@@ -27,8 +27,9 @@ This will work with direct TPM access, but note that internally this calls a
 
   * **\--policy-session**:
 
-    Start a policy session of type **TPM_SE_POLICY**. Default without this option
-    is **TPM_SE_TRIAL**.
+    Start a policy session of type **TPM_SE_POLICY**. Default without this
+    option is **TPM_SE_TRIAL**.
+
     **NOTE**: A *trial* session is used when building a policy and a *policy*
     session is used when authenticating with a policy.
 
@@ -37,19 +38,43 @@ This will work with direct TPM access, but note that internally this calls a
     Start an HMAC session to be used as an audit session. Default without
     this option is **TPM2_SE_TRIAL**.
 
+  * **\--hmac-session**:
+
+    Start an HMAC session of type **TPM_SE_HMAC**. Default without this option
+    is **TPM2_SE_TRIAL**.
+
   * **-g**, **\--hash-algorithm**=_ALGORITHM_:
 
     The hash algorithm used in computation of the policy digest.
 
   * **-c**, **\--key-context**=_OBJECT_:
 
-    Set the session encryption and bind key. When using this, sensitive data
-    transmitted to the TPM will be encrypted with AES128CFB. **This prevents bus
-    snooping attacks.**
+    Set the tpmkey and bind objects to be the same.
+    Session parameter encryption is turned on.
+    Session parameter decryption is turned on.
+    Parameter encryption/decryption symmetric-key set to AES-CFB.
 
   * **-S**, **\--session**=_FILE_:
 
     The name of the policy session file, required.
+
+  * **\--bind-context**=_FILE_:
+
+    Set the bind object.
+    Session parameter encryption is off. Use **tpm2_sessionconfig** to turn on.
+    Session parameter decryption is off. Use **tpm2_sessionconfig** to turn on.
+    Parameter encryption/decryption symmetric-key set to AES-CFB.
+
+  * **\--bind-auth**=_AUTH_:
+
+    Set the authorization value for the bind object.
+
+  * **\--tpmkey-context**=_FILE_:
+
+    Set the tpmkey object.
+    Session parameter encryption is off. Use **tpm2_sessionconfig** to turn on.
+    Session parameter decryption is off. Use **tpm2_sessionconfig** to turn on.
+    Parameter encryption/decryption symmetric-key set to AES-CFB.
 
 ## References
 

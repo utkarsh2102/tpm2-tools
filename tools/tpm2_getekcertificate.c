@@ -190,17 +190,21 @@ static char *base64_encode(const unsigned char* buffer)
     return final_string;
 }
 
-static size_t writecallback(void *contents, size_t size, size_t nitems,
-    char *CERT_BUFFER) {
+static size_t writecallback(char *contents, size_t size, size_t nitems,
+    void *CERT_BUFFER) {
 
     strncpy(CERT_BUFFER, (const char *)contents, nitems * size);
     ctx.rsa_cert_buffer_size = nitems * size;
 
     return ctx.rsa_cert_buffer_size;
 }
+
 static bool retrieve_web_endorsement_certificate(char *b64h) {
 
-    size_t len = 1 + strlen(b64h) + strlen(ctx.ek_server_addr);
+    #define NULL_TERM_LEN 1                 // '\0'
+    #define PATH_JOIN_CHAR_LEN 1            // '/'
+    size_t len = strlen(ctx.ek_server_addr) + strlen(b64h) + NULL_TERM_LEN +
+        PATH_JOIN_CHAR_LEN;
     char *weblink = (char *) malloc(len);
     if (!weblink) {
         LOG_ERR("oom");
@@ -235,7 +239,7 @@ static bool retrieve_web_endorsement_certificate(char *b64h) {
         }
     }
 
-    snprintf(weblink, len, "%s%s", ctx.ek_server_addr, b64h);
+    snprintf(weblink, len, "%s%s%s", ctx.ek_server_addr, "/", b64h);
     rc = curl_easy_setopt(curl, CURLOPT_URL, weblink);
     if (rc != CURLE_OK) {
         LOG_ERR("curl_easy_setopt for CURLOPT_URL failed: %s",
@@ -273,6 +277,13 @@ static bool retrieve_web_endorsement_certificate(char *b64h) {
         LOG_ERR("curl_easy_setopt for CURLOPT_WRITEDATA failed: %s",
                 curl_easy_strerror(rc));
         ret = false;
+        goto out_easy_cleanup;
+    }
+
+    rc = curl_easy_setopt(curl, CURLOPT_FAILONERROR, true);
+    if (rc != CURLE_OK) {
+        LOG_ERR("curl_easy_setopt for CURLOPT_FAILONERROR failed: %s",
+                curl_easy_strerror(rc));
         goto out_easy_cleanup;
     }
 

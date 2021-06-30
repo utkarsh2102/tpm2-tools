@@ -62,6 +62,10 @@ PKG_CHECK_MODULES([CRYPTO], [libcrypto >= 1.0.2g])
 PKG_CHECK_MODULES([CURL], [libcurl])
 PKG_CHECK_MODULES([UUID], [uuid])
 
+# pretty print of devicepath if efivar library is present
+PKG_CHECK_MODULES([EFIVAR], [efivar],,[true])
+AC_CHECK_HEADERS([efivar/efivar.h])
+
 # backwards compat with older pkg-config
 # - pull in AC_DEFUN from pkg.m4
 m4_ifndef([PKG_CHECK_VAR], [
@@ -85,6 +89,12 @@ AC_ARG_WITH([bashcompdir],
             [PKG_CHECK_VAR([with_bashcompdir], [bash-completion], [completionsdir], ,
                            [with_bashcompdir="${datarootdir}/bash-completion/completions"])])
 AC_SUBST(bashcompdir, [$with_bashcompdir])
+
+AC_ARG_WITH([tpmsim],
+            AS_HELP_STRING([--with-tpmsim=BIN], [simulator used for testing]),
+            [],
+            [])
+AC_SUBST(tpmsim, [$with_tpmsim])
 
 AC_CANONICAL_HOST
 
@@ -113,8 +123,8 @@ AM_CONDITIONAL([PERSISTENT], [test "x$enable_persistent" != xno])
 
 dnl macro that checks for specific modules in python
 AC_DEFUN([AC_PYTHON_MODULE],
-[AC_MSG_CHECKING([for module $1 in python])
-  echo "import $1" | python - 2>/dev/null
+[AC_MSG_CHECKING([for module $1 in $PYTHON])
+  echo "import $1" | $PYTHON - 2>/dev/null
   if test $? -ne 0 ; then
     AC_MSG_ERROR([not found])
   else
@@ -137,20 +147,37 @@ AS_IF([test "x$enable_unit" != xno], [
     PKG_CHECK_MODULES([CMOCKA],[cmocka])
 
     AC_CHECK_PROG([tpm2_abrmd], [tpm2-abrmd], yes, no)
-    AS_IF([test $tpm2_abrmd = no],
-          [AC_MSG_ERROR([Required executable tpm2_abrmd not found, try setting PATH])])
+    AS_IF([test $tpm2_abrmd = yes],
+	  [TPM2_ABRMD=tpm2-abrmd],
+          [AC_MSG_ERROR([Required executable tpm2_abrmd not found, try setting PATH])]
+    )
+    AC_SUBST([TPM2_ABRMD])
 
-    AC_CHECK_PROG([tpm_server], [tpm_server], yes, no)
-    AS_IF([test $tpm_server = no],
-          [AC_MSG_ERROR([Required executable tpm_server not found, try setting PATH])])
+	AS_IF([test -z "$tpmsim"], [
+        AC_CHECK_PROG([swtpm], [swtpm], yes, no)
+        AC_CHECK_PROG([tpm_server], [tpm_server], yes, no)
+        AS_IF([test $swtpm = yes], [TPM2_SIM=swtpm],
+          [AS_IF([test $tpm_server = yes], [TPM2_SIM=tpm_server],
+                 [AC_MSG_ERROR([Required executables swtpm or tpm_server not found, try setting PATH])])])
+        ],
+        [
+        AC_CHECK_PROG([HAS_TPM2_SIM], [$tpmsim], yes, no)
+        AS_IF([test "$HAS_TPM2_SIM" = yes],
+            [TPM2_SIM=$tpmsim],
+            [AC_MSG_ERROR([Required executable $tpmsim not found, system tests require a tpm simulator shell!])]
+        )
+        ]
+    )
+    AC_SUBST([TPM2_SIM])
 
     AC_CHECK_PROG([BASH_SHELL], [bash], yes, no)
     AS_IF([test $BASH_SHELL = no],
           [AC_MSG_ERROR([Required executable bash not found, system tests require a bash shell!])])
 
-    AC_CHECK_PROG([PYTHON], [python], yes, no)
-    AS_IF([test $PYTHON = no],
-          [AC_MSG_ERROR([Required executable python not found, some system tests will fail!])])
+    AM_PATH_PYTHON([2.7],
+        [],
+        [AC_MSG_ERROR([Required executable python not found, some system tests will fail!])]
+    )
 
     AC_PYTHON_MODULE([yaml])
 
@@ -180,7 +207,7 @@ AS_IF([test "x$enable_unit" != xno], [
           [AC_MSG_ERROR([Required executable openssl not found, some system tests will fail!])])
 
     unit_test_tool_report="- tpm2_abrmd: $tpm2_abrmd
-    - tpm_server: $tpm_server
+    - TPM simulator: $TPM2_SIM
     - bash: $BASH_SHELL
     - python: $PYTHON
     - xxd: $XXD
@@ -232,7 +259,7 @@ AS_IF([test x"$enable_hardening" != x"no"], [
 
   add_hardened_c_flag([-Wall])
   add_hardened_c_flag([-Wextra])
-  add_hardened_c_flag([-Werror])
+  AS_IF([test "x$ax_is_release" = "xno"], [add_hardened_c_flag([-Werror])])
 
   add_hardened_c_flag([-Wformat])
   add_hardened_c_flag([-Wformat-security])
@@ -268,6 +295,9 @@ AC_DEFUN([add_c_flag], [
 # -D_GNU_SOURCE is required for execvpe() in options.c
 add_c_flag([-D_GNU_SOURCE], [AC_MSG_ERROR([Cannot enable -D_GNU_SOURCE])])
 
+# Enable gnu99 mode, since we use some of these features.
+add_c_flag([-std=gnu99], [AC_MSG_ERROR([Cannot enable -std=gnu99])])
+
 # Best attempt compiler options that are on newer versions of GCC that
 # we can't widely enforce without killing other peoples builds.
 # Works with gcc only. Needs to be disabled on BSD and clang
@@ -276,7 +306,7 @@ AS_IF([test "$HOSTOS" = "Linux"],
        add_c_flag([-Wstringop-truncation])
        add_c_flag([-Wduplicated-branches])
        add_c_flag([-Wduplicated-cond])
-       add_hardened_c_flag([-Wbool-compare])],[])
+       add_c_flag([-Wbool-compare])],[])
 
 # Best attempt, strip unused stuff from the binary to reduce size.
 # Rather than nesting these and making them ugly just use a counter.

@@ -456,4 +456,60 @@ void tpm2_util_print_time(const TPMS_TIME_INFO *current_time);
 bool tpm2_calq_qname(TPM2B_NAME *pqname,
         TPMI_ALG_HASH halg, TPM2B_NAME *name, TPM2B_NAME *qname);
 
+/**
+ * Reads safely from stdin.
+ *
+ * @param length
+ *  Maximum length to read.
+ * @param data
+ *  The output data that was read, valid on success.
+ * @return
+ *  True on success, false otherwise.
+ */
+bool tpm2_safe_read_from_stdin(int length, char *data);
+
+
+/**
+ * Converts a PEM-encoded public key to its sha256 representation (fingerprint).
+ * The resulting Base64-encoded fingerprint format is based on the SSH:
+ * '''
+ *      ssh-keygen -lf id_ecdsa.pub
+ *          256 SHA256:wTUOtZnoSGKwq36mPIN20rCK0Fc1y0zCvHxI2eAvVxU
+ * '''
+ *
+ * @param pem_encoded_key
+ *  The PEM-encoded public key.
+ * @param fingerprint
+ *  The resulting fingerprint, valid on success.
+ * @return
+ *  True on success, false otherwise.
+ */
+bool tpm2_pem_encoded_key_to_fingerprint(const char* pem_encoded_key, char*
+    fingerprint);
+
+/**
+ * Restores session handles to be used as auxilary sessions in addition to the
+ * possible authorization sessions with a command.
+ *
+ * @param ectx
+ *  The ESAPI context
+ * @param session_cnt
+ *  Total number of sessions to restore
+ * @param session_path
+ *  An array of string data specifying the individual session file path
+ * @param session_handle
+ *  An array of session handles updated as a result resuming sessions
+ * @param session
+ *  An array of session structures updated as a result of resuming sessions
+ * @return
+ *  Success: tool_rc_success, Faiure: tool_rc_general_error
+ */
+tool_rc tpm2_util_aux_sessions_setup( ESYS_CONTEXT *ectx,
+    uint8_t session_cnt, const char **session_path, ESYS_TR *session_handle,
+    tpm2_session **session);
+
+TPMI_ALG_HASH tpm2_util_calculate_phash_algorithm(ESYS_CONTEXT *ectx,
+    const char **cphash_path, TPM2B_DIGEST *cp_hash, const char **rphash_path,
+    TPM2B_DIGEST *rp_hash, tpm2_session **sessions);
+
 #endif /* STRING_BYTES_H */
