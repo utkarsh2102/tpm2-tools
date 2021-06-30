@@ -193,8 +193,7 @@ void tpm2_print_usage(const char *command, struct tpm2_options *tool_opts) {
     unsigned int i;
     bool indent = true;
     char *command_copy;
-
-    if (!tool_opts) {
+    if (!tool_opts || !command) {
         return;
     }
 
@@ -300,7 +299,7 @@ tpm2_option_code tpm2_handle_options(int argc, char **argv,
             if (argv[optind - 1]) {
                 if (!strcmp(argv[optind - 1], "--help=no-man") ||
                     !strcmp(argv[optind - 1], "-h=no-man") ||
-                    (argv[optind] && !strcmp(argv[optind], "no-man"))) {
+                    (argc < optind && !strcmp(argv[optind], "no-man"))) {
                     manpager = false;
                     optind++;
                 /*
@@ -309,7 +308,7 @@ tpm2_option_code tpm2_handle_options(int argc, char **argv,
                  */
                 } else if (!strcmp(argv[optind - 1], "--help=man") ||
                            !strcmp(argv[optind - 1], "-h=man") ||
-                           (argv[optind] && !strcmp(argv[optind], "man"))) {
+                           (argc < optind && !strcmp(argv[optind], "man"))) {
                     manpager = true;
                     explicit_manpager = true;
                     optind++;
@@ -318,7 +317,7 @@ tpm2_option_code tpm2_handle_options(int argc, char **argv,
                      * argv[0] = "tool name"
                      * argv[1] = "--help" argv[2] = 0
                      */
-                    if (!argv[optind] && argc == 2) {
+                    if (optind >= argc && argc == 2) {
                         manpager = false;
                     } else {
                         /*

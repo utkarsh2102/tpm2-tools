@@ -118,4 +118,73 @@ typedef struct {
     BYTE DevicePath[];
 } PACKED UEFI_IMAGE_LOAD_EVENT;
 
+/* 
+   These structs represent a GUID Partition Table, and are defined in the TGC PC
+   Client Platform Firmware Profile Specification Revision 1.04 Section 9.4.
+   The struct members are defined in the UEFI Specification Version 2.8
+   Section 5.3
+ */
+typedef struct {
+    UINT64 Signature;
+    UINT32 Revision;
+    UINT32 HeaderSize;
+    UINT32 HeaderCRC32;
+    UINT32 Reserved;
+    UINT64 MyLBA;
+    UINT64 AlternateLBA;
+    UINT64 FirstUsableLBA;
+    UINT64 LastUsableLBA;
+    BYTE DiskGUID[16];
+    UINT64 PartitionEntryLBA;
+    UINT32 NumberOfPartitionEntries;
+    UINT32 SizeOfPartitionEntry;
+    UINT32 PartitionEntryArrayCRC32;
+} PACKED UEFI_PARTITION_TABLE_HEADER;
+
+typedef struct {
+    BYTE PartitionTypeGUID[16];
+    BYTE UniquePartitionGUID[16];
+    UINT64 StartingLBA;
+    UINT64 EndingLBA;
+    UINT64 Attributes;
+    BYTE PartitionName[72];
+} PACKED UEFI_PARTITION_ENTRY;
+
+typedef struct {
+    UEFI_PARTITION_TABLE_HEADER UEFIPartitionHeader;
+    UINT64 NumberOfPartitions;
+    UEFI_PARTITION_ENTRY Partitions[];
+} PACKED UEFI_GPT_DATA;
+
+/*
+ * An UEFI signature database is represented as a concatenated list of
+ * EFI_SIGNATURE_LIST, which contains one or more EFI_SIGNATURE_DATA. These
+ * structs are described in more details in UEFI Spec Section 32.4.1
+ */
+typedef struct {
+    BYTE SignatureType[16];
+    UINT32 SignatureListSize;
+    UINT32 SignatureHeaderSize;
+    UINT32 SignatureSize;
+    // BYTE SignatureHeader[SignatureHeaderSize];
+    // BYTE Signatures[][SignatureSize];
+} PACKED EFI_SIGNATURE_LIST;
+
+typedef struct {
+    BYTE SignatureOwner[16];
+    BYTE SignatureData[];
+} PACKED EFI_SIGNATURE_DATA;
+
+/*
+ * EFI_LOAD_OPTION describes a load option variable. This struct is described
+ * in more details in UEFI Spec Section 3.1.3
+ */
+typedef struct {
+    UINT32 Attributes;
+    UINT16 FilePathListLength;
+    UINT16 Description[];
+    // EFI_DEVICE_PATH_PROTOCOL FilePathList[];
+    // UINT8 OptionalData[];
+} PACKED EFI_LOAD_OPTION;
+
 #endif

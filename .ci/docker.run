@@ -3,7 +3,7 @@
 
 set -e
 
-source $TRAVIS_BUILD_DIR/.ci/docker-prelude.sh
+source $DOCKER_BUILD_DIR/.ci/docker-prelude.sh
 
 if [ -d build ]; then
   rm -rf build
@@ -83,8 +83,8 @@ popd
 #
 if [[ "${TPM2_TSS_VERSION}" == "master" && "$CC" != clang* ]];then
   echo "tpm2-tools v4.X compatibility test follows"
-  git fetch origin --tags -q
-  git checkout 4.3.0 test/integration/tests -q
+  git fetch origin refs/tags/4.3.0:refs/tags/4.3.0
+  git checkout 4.3.0 test/integration/tests
   git clean -fdx tests/integration/fapi
   #
   # RSA OAEP decryption was enabled as a feature after 4.X and so testing it
@@ -100,7 +100,6 @@ if [[ "${TPM2_TSS_VERSION}" == "master" && "$CC" != clang* ]];then
   #
   rm test/integration/tests/symlink.sh
 
-  ./bootstrap
   #
   # Beyond 4.X release, the tpm2-tools were combined into a single
   # busybox style binary "tpm2". The following makes adjustments
@@ -116,9 +115,11 @@ if [[ "${TPM2_TSS_VERSION}" == "master" && "$CC" != clang* ]];then
       done
   done
 
+  ./bootstrap
+
   mkdir compatibility_testbuild
   pushd compatibility_testbuild
-  ../configure --enable-unit --disable-fapi --disable-hardening
+  ../configure --enable-unit --disable-fapi --disable-hardening --with-tpmsim=tpm_server
   make -j$(nproc)
   make check -j$(nproc)
   popd

@@ -99,7 +99,7 @@ static TPM2_KEY_BITS get_pub_asym_key_bits(TPM2B_PUBLIC *public) {
 }
 
 static bool share_secret_with_tpm2_rsa_public_key(TPM2B_DIGEST *protection_seed,
-        TPM2B_PUBLIC *parent_pub, unsigned char *label, int label_len,
+        TPM2B_PUBLIC *parent_pub, const unsigned char *label, int label_len,
         TPM2B_ENCRYPTED_SECRET *encrypted_protection_seed) {
     bool rval = false;
     RSA *rsa = NULL;
@@ -218,7 +218,7 @@ bool tpm2_identity_util_calc_outer_integrity_hmac_key_and_dupsensitive_enc_key(
 
 bool tpm2_identity_util_share_secret_with_public_key(
         TPM2B_DIGEST *protection_seed, TPM2B_PUBLIC *parent_pub,
-        unsigned char *label, int label_len,
+        const unsigned char *label, int label_len,
         TPM2B_ENCRYPTED_SECRET *encrypted_protection_seed) {
     bool result = false;
     TPMI_ALG_PUBLIC alg = parent_pub->publicArea.type;
@@ -364,16 +364,29 @@ bool tpm2_identity_util_calculate_inner_integrity(TPMI_ALG_HASH name_alg,
         TPM2B_DATA *enc_sensitive_key, TPMT_SYM_DEF_OBJECT *sym_alg,
         TPM2B_MAX_BUFFER *encrypted_inner_integrity) {
 
+    TSS2_RC rval;
+
     //Marshal sensitive area
     uint8_t buffer_marshalled_sensitiveArea[TPM2_MAX_DIGEST_BUFFER] = { 0 };
     size_t marshalled_sensitive_size = 0;
-    Tss2_MU_TPMT_SENSITIVE_Marshal(&sensitive->sensitiveArea,
+    rval = Tss2_MU_TPMT_SENSITIVE_Marshal(&sensitive->sensitiveArea,
             buffer_marshalled_sensitiveArea + sizeof(uint16_t),
             TPM2_MAX_DIGEST_BUFFER, &marshalled_sensitive_size);
+    if (rval != TPM2_RC_SUCCESS)
+    {
+        LOG_ERR("Error serializing the sensitive data");
+        return false;
+    }
+
     size_t marshalled_sensitive_size_info = 0;
-    Tss2_MU_UINT16_Marshal(marshalled_sensitive_size,
+    rval = Tss2_MU_UINT16_Marshal(marshalled_sensitive_size,
             buffer_marshalled_sensitiveArea, sizeof(uint16_t),
             &marshalled_sensitive_size_info);
+    if (rval != TPM2_RC_SUCCESS)
+    {
+        LOG_ERR("Error serializing the sensitive size");
+        return false;
+    }
 
     //concatenate NAME
     memcpy(buffer_marshalled_sensitiveArea + marshalled_sensitive_size +
@@ -385,8 +398,13 @@ bool tpm2_identity_util_calculate_inner_integrity(TPMI_ALG_HASH name_alg,
                     + marshalled_sensitive_size_info + pubname->size;
     size_t digest_size_info = 0;
     UINT16 hash_size = tpm2_alg_util_get_hash_size(name_alg);
-    Tss2_MU_UINT16_Marshal(hash_size, marshalled_sensitive_and_name_digest,
+    rval = Tss2_MU_UINT16_Marshal(hash_size, marshalled_sensitive_and_name_digest,
             sizeof(uint16_t), &digest_size_info);
+    if (rval != TPM2_RC_SUCCESS)
+    {
+        LOG_ERR("Error serializing the name size");
+        return false;
+    }
 
     digester d = tpm2_openssl_halg_to_digester(name_alg);
     d(buffer_marshalled_sensitiveArea,
@@ -422,4 +440,55 @@ void tpm2_identity_util_calculate_outer_integrity(TPMI_ALG_HASH parent_name_alg,
     hmac_outer_integrity(parent_name_alg, encrypted_duplicate_sensitive->buffer,
             encrypted_duplicate_sensitive->size, pubname->name, pubname->size,
             protection_hmac_key->buffer, outer_hmac);
+}
+
+bool tpm2_identity_create_name(TPM2B_PUBLIC *public, TPM2B_NAME *pubname) {
+
+    /*
+     * A TPM2B_NAME is the name of the algorithm, followed by the hash.
+     * Calculate the name by:
+     * 1. Marshaling the name algorithm
+     * 2. Marshaling the TPMT_PUBLIC past the name algorithm from step 1.
+     * 3. Hash the TPMT_PUBLIC portion in marshaled data.
+     */
+    TSS2_RC rval;
+
+    TPMI_ALG_HASH name_alg = public->publicArea.nameAlg;
+
+    // Step 1 - set beginning of name to hash alg
+    size_t hash_offset = 0;
+    rval = Tss2_MU_UINT16_Marshal(name_alg, pubname->name, pubname->size,
+            &hash_offset);
+    if (rval != TPM2_RC_SUCCESS)
+    {
+        LOG_ERR("Error serializing the name size");
+        return false;
+    }
+
+    // Step 2 - marshal TPMTP
+    TPMT_PUBLIC marshaled_tpmt;
+    size_t tpmt_marshalled_size = 0;
+    rval = Tss2_MU_TPMT_PUBLIC_Marshal(&public->publicArea,
+            (uint8_t *) &marshaled_tpmt, sizeof(public->publicArea),
+            &tpmt_marshalled_size);
+    if (rval != TPM2_RC_SUCCESS)
+    {
+        LOG_ERR("Error serializing the public area");
+        return false;
+    }
+
+    // Step 3 - Hash the data into name just past the alg type.
+    digester d = tpm2_openssl_halg_to_digester(name_alg);
+    if (!d) {
+        return false;
+    }
+
+    d((const unsigned char *) &marshaled_tpmt, tpmt_marshalled_size,
+            pubname->name + hash_offset);
+
+    //Set the name size, UINT16 followed by HASH
+    UINT16 hash_size = tpm2_alg_util_get_hash_size(name_alg);
+    pubname->size = hash_size + hash_offset;
+
+    return true;
 }

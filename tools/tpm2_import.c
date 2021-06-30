@@ -74,47 +74,7 @@ static tool_rc readpublic(ESYS_CONTEXT *ectx, ESYS_TR handle,
     return tpm2_readpublic(ectx, handle, public, NULL, NULL);
 }
 
-static bool create_name(TPM2B_PUBLIC *public, TPM2B_NAME *pubname) {
-
-    /*
-     * A TPM2B_NAME is the name of the algorithm, followed by the hash.
-     * Calculate the name by:
-     * 1. Marshaling the name algorithm
-     * 2. Marshaling the TPMT_PUBLIC past the name algorithm from step 1.
-     * 3. Hash the TPMT_PUBLIC portion in marshaled data.
-     */
-
-    TPMI_ALG_HASH name_alg = public->publicArea.nameAlg;
-
-    // Step 1 - set beginning of name to hash alg
-    size_t hash_offset = 0;
-    Tss2_MU_UINT16_Marshal(name_alg, pubname->name, pubname->size,
-            &hash_offset);
-
-    // Step 2 - marshal TPMTP
-    TPMT_PUBLIC marshaled_tpmt;
-    size_t tpmt_marshalled_size = 0;
-    Tss2_MU_TPMT_PUBLIC_Marshal(&public->publicArea,
-            (uint8_t *) &marshaled_tpmt, sizeof(public->publicArea),
-            &tpmt_marshalled_size);
-
-    // Step 3 - Hash the data into name just past the alg type.
-    digester d = tpm2_openssl_halg_to_digester(name_alg);
-    if (!d) {
-        return false;
-    }
-
-    d((const unsigned char *) &marshaled_tpmt, tpmt_marshalled_size,
-            pubname->name + 2);
-
-    //Set the name size, UINT16 followed by HASH
-    UINT16 hash_size = tpm2_alg_util_get_hash_size(name_alg);
-    pubname->size = hash_size + 2;
-
-    return true;
-}
-
-static void create_import_key_private_data(TPM2B_PRIVATE *private,
+static bool create_import_key_private_data(TPM2B_PRIVATE *private,
         TPMI_ALG_HASH parent_name_alg,
         TPM2B_MAX_BUFFER *encrypted_duplicate_sensitive,
         TPM2B_DIGEST *outer_hmac) {
@@ -122,16 +82,25 @@ static void create_import_key_private_data(TPM2B_PRIVATE *private,
     //UINT16 hash_size = tpm2_alg_util_get_hash_size(ctx.name_alg);
     UINT16 parent_hash_size = tpm2_alg_util_get_hash_size(parent_name_alg);
 
-private->size = sizeof(uint16_t) + parent_hash_size
+    private->size = sizeof(parent_hash_size) + parent_hash_size
             + encrypted_duplicate_sensitive->size;
+
     size_t hmac_size_offset = 0;
-    Tss2_MU_UINT16_Marshal(parent_hash_size, private->buffer, sizeof(uint16_t),
-            &hmac_size_offset);
+    TSS2_RC rval = Tss2_MU_UINT16_Marshal(parent_hash_size, private->buffer,
+            sizeof(parent_hash_size), &hmac_size_offset);
+    if (rval != TPM2_RC_SUCCESS)
+    {
+        LOG_ERR("Error serializing parent hash size");
+        return false;
+    }
+
     memcpy(private->buffer + hmac_size_offset, outer_hmac->buffer,
             parent_hash_size);
     memcpy(private->buffer + hmac_size_offset + parent_hash_size,
             encrypted_duplicate_sensitive->buffer,
             encrypted_duplicate_sensitive->size);
+
+    return true;
 }
 
 static tool_rc key_import(ESYS_CONTEXT *ectx, TPM2B_PUBLIC *parent_pub,
@@ -149,13 +118,23 @@ static tool_rc key_import(ESYS_CONTEXT *ectx, TPM2B_PUBLIC *parent_pub,
     TPM2B_DATA enc_sensitive_key = {
         .size = parent_pub->publicArea.parameters.rsaDetail.symmetric.keyBits.sym / 8
     };
-    memset(enc_sensitive_key.buffer, 0xFF, enc_sensitive_key.size);
+
+    if(enc_sensitive_key.size < 16) {
+        LOG_ERR("Calculated wrapping keysize is less than 16 bytes, got: %u", enc_sensitive_key.size);
+        return tool_rc_general_error;
+    }
+
+    int ossl_rc = RAND_bytes(enc_sensitive_key.buffer, enc_sensitive_key.size);
+    if (ossl_rc != 1) {
+        LOG_ERR("RAND_bytes failed: %s", ERR_error_string(ERR_get_error(), NULL));
+        return tool_rc_general_error;
+    }
 
     /*
      * Calculate the object name.
      */
     TPM2B_NAME pubname = TPM2B_TYPE_INIT(TPM2B_NAME, name);
-    bool res = create_name(pubkey, &pubname);
+    bool res = tpm2_identity_create_name(pubkey, &pubname);
     if (!res) {
         return false;
     }
@@ -179,8 +158,11 @@ static tool_rc key_import(ESYS_CONTEXT *ectx, TPM2B_PUBLIC *parent_pub,
             &encrypted_duplicate_sensitive, &outer_hmac);
 
     TPM2B_PRIVATE private = TPM2B_EMPTY_INIT;
-    create_import_key_private_data(&private, parent_pub->publicArea.nameAlg,
+    res = create_import_key_private_data(&private, parent_pub->publicArea.nameAlg,
             &encrypted_duplicate_sensitive, &outer_hmac);
+    if (!res) {
+        return tool_rc_general_error;
+    }
 
     TPMT_SYM_DEF_OBJECT *sym_alg =
             &parent_pub->publicArea.parameters.rsaDetail.symmetric;
@@ -360,16 +342,16 @@ static tool_rc check_options(void) {
     return rc;
 }
 
-static tool_rc openssl_import(ESYS_CONTEXT *ectx) {
 
-    bool free_ppub = false;
-    tool_rc rc = tool_rc_general_error;
+static tool_rc openssl_import(ESYS_CONTEXT *ectx) {
 
     /*
      * Load the parent public file, or read it from the TPM if not specified.
      * We need this information for encrypting the protection seed.
      */
+    bool free_ppub = false;
     tool_rc tmp_rc;
+    tool_rc rc = tool_rc_general_error;
     TPM2B_PUBLIC ppub = TPM2B_EMPTY_INIT;
     TPM2B_PUBLIC *parent_pub = NULL;
 
@@ -388,125 +370,25 @@ static tool_rc openssl_import(ESYS_CONTEXT *ectx) {
         return tmp_rc;
     }
 
-    TPMA_OBJECT attrs = TPMA_OBJECT_DECRYPT | TPMA_OBJECT_SIGN_ENCRYPT;
-
-    TPM2B_PUBLIC public = {
-        .size = 0,
-        .publicArea = {
-            .nameAlg = TPM2_ALG_SHA256,
-        },
-    };
-
-    if (ctx.policy) {
-        public.publicArea.authPolicy.size = sizeof(public.publicArea.authPolicy.buffer);
-        result = files_load_bytes_from_path(ctx.policy,
-            public.publicArea.authPolicy.buffer,
-                &public.publicArea.authPolicy.size);
-        if (!result) {
-            return tool_rc_general_error;
-        }
-    } else {
-        attrs |= TPMA_OBJECT_USERWITHAUTH;
-    }
-
     TPM2B_SENSITIVE private = TPM2B_EMPTY_INIT;
-
-    if (ctx.key_auth_str) {
-        tpm2_session *tmp;
-        tmp_rc = tpm2_auth_util_from_optarg(NULL, ctx.key_auth_str, &tmp, true);
-        if (tmp_rc != tool_rc_success) {
-            LOG_ERR("Invalid key authorization");
-            return tmp_rc;
-        }
-
-        const TPM2B_AUTH *auth = tpm2_session_get_auth_value(tmp);
-        private.sensitiveArea.authValue = *auth;
-
-        tpm2_session_close(&tmp);
-    }
-
-    /*
-     * Set the object attributes if specified, overwriting the defaults, but hooking the errata
-     * fixups.
-     */
-    if (ctx.attrs) {
-        TPMA_OBJECT *obj_attrs = &public.publicArea.objectAttributes;
-        result = tpm2_attr_util_obj_from_optarg(ctx.attrs, obj_attrs);
-        if (!result) {
-            LOG_ERR("Invalid object attribute, got\"%s\"", ctx.attrs);
-            return tool_rc_general_error;
-        }
-
-        tpm2_errata_fixup(SPEC_116_ERRATA_2_7,
-                &public.publicArea.objectAttributes);
-    } else {
-        public.publicArea.objectAttributes = attrs;
-    }
-
-    if (ctx.name_alg) {
-        TPMI_ALG_HASH alg = tpm2_alg_util_from_optarg(ctx.name_alg,
-                tpm2_alg_util_flags_hash);
-        if (alg == TPM2_ALG_ERROR) {
-            LOG_ERR("Invalid name hashing algorithm, got\"%s\"", ctx.name_alg);
-            return tool_rc_general_error;
-        }
-        public.publicArea.nameAlg = alg;
-    } else {
-        /*
-         * use the parent name algorithm if not specified
-         */
-    public.publicArea.nameAlg = parent_pub->publicArea.nameAlg;
-    }
-
-    /*
-     * The TPM Requires that the name algorithm for the child be less than the name
-     * algorithm of the parent when the parent's scheme is NULL.
-     *
-     * This check can be seen in the simulator at:
-     *   - File: CryptUtil.c
-     *   - Func: CryptSecretDecrypt()
-     *   - Line: 2019
-     *   - Decription: Limits the size of the hash algorithm to less then the parent's name-alg when scheme is NULL.
-     */
-    UINT16 hash_size = tpm2_alg_util_get_hash_size(public.publicArea.nameAlg);
-    UINT16 parent_hash_size = tpm2_alg_util_get_hash_size(
-            parent_pub->publicArea.nameAlg);
-    if (hash_size > parent_hash_size) {
-        LOG_WARN("Hash selected is larger then parent hash size, coercing to "
-                 "parent hash algorithm: %s",
-                tpm2_alg_util_algtostr(parent_pub->publicArea.nameAlg,
-                        tpm2_alg_util_flags_hash));
-    public.publicArea.nameAlg = parent_pub->publicArea.nameAlg;
-    }
-
-    /*
-     * Generate and encrypt seed
-     */
-    TPM2B_DIGEST *seed = &private.sensitiveArea.seedValue;
+    TPM2B_PUBLIC public = TPM2B_EMPTY_INIT;
     TPM2B_ENCRYPTED_SECRET encrypted_seed = TPM2B_EMPTY_INIT;
-    unsigned char label[10] = { 'D', 'U', 'P', 'L', 'I', 'C', 'A', 'T', 'E', 0 };
-    bool res;
-    res = tpm2_identity_util_share_secret_with_public_key(seed, parent_pub,
-            label, 10, &encrypted_seed);
-    if (!res) {
-        LOG_ERR("Failed Seed Encryption\n");
-        goto out;
-    }
 
-    /*
-     * Populate all the private and public data fields we can based on the key type and the PEM files read in.
-     */
-    tpm2_openssl_load_rc status = tpm2_openssl_load_private(ctx.input_key_file,
-            ctx.auth_key_file, ctx.key_type, &public, &private);
-    if (status == lprc_error) {
+    result = tpm2_openssl_import_keys(
+        parent_pub,
+        &private,
+        &public,
+        &encrypted_seed,
+        ctx.input_key_file,
+        ctx.key_type,
+        ctx.auth_key_file,
+        ctx.policy,
+        ctx.key_auth_str,
+        ctx.attrs,
+        ctx.name_alg
+    );
+    if (!result)
         goto out;
-    }
-
-    if (!tpm2_openssl_did_load_public(status)) {
-        LOG_ERR("Did not find public key information in file: \"%s\"",
-                ctx.input_key_file);
-        goto out;
-    }
 
     TPM2B_PRIVATE *imported_private = NULL;
     tmp_rc = key_import(ectx, parent_pub, &private, &public, &encrypted_seed,
@@ -519,13 +401,13 @@ static tool_rc openssl_import(ESYS_CONTEXT *ectx) {
     /*
      * Save the public and imported_private structure to disk
      */
-    res = files_save_public(&public, ctx.public_key_file);
-    if (!res) {
+    result = files_save_public(&public, ctx.public_key_file);
+    if (!result) {
         goto keyout;
     }
 
-    res = files_save_private(imported_private, ctx.private_key_file);
-    if (!res) {
+    result = files_save_private(imported_private, ctx.private_key_file);
+    if (!result) {
         goto keyout;
     }
 

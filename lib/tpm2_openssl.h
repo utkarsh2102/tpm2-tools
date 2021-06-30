@@ -36,6 +36,8 @@
 int RSA_set0_key(RSA *r, BIGNUM *n, BIGNUM *e, BIGNUM *d);
 void RSA_get0_factors(const RSA *r, const BIGNUM **p, const BIGNUM **q);
 int ECDSA_SIG_set0(ECDSA_SIG *sig, BIGNUM *r, BIGNUM *s);
+EVP_ENCODE_CTX *EVP_ENCODE_CTX_new(void);
+void EVP_ENCODE_CTX_free(EVP_ENCODE_CTX *ctx);
 #endif
 
 /**
@@ -248,6 +250,25 @@ static inline bool tpm2_openssl_did_load_public(
 tpm2_openssl_load_rc tpm2_openssl_load_private(const char *path,
         const char *pass, TPMI_ALG_PUBLIC alg, TPM2B_PUBLIC *pub,
         TPM2B_SENSITIVE *priv);
+
+
+/**
+ * Load an OpenSSL private key and configure all of the flags based on
+ * a parent key, policy, attributes, and authorization.
+ */
+bool tpm2_openssl_import_keys(
+    TPM2B_PUBLIC *parent_pub,
+    TPM2B_SENSITIVE *private,
+    TPM2B_PUBLIC *public,
+    TPM2B_ENCRYPTED_SECRET *encrypted_seed,
+    const char *input_key_file,
+    TPMI_ALG_PUBLIC key_type,
+    const char *auth_key_file,
+    const char *policy_file,
+    const char *key_auth_str,
+    char *attrs_str,
+    const char *name_alg_str
+);
 
 /**
  * Loads a public portion of a key from a file. Files can be the raw key, in the case

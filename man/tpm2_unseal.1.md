@@ -35,7 +35,19 @@ be of the type _TPM\_ALG\_KEYEDHASH_.
 
     File path to record the hash of the command parameters. This is commonly
     termed as cpHash. NOTE: When this option is selected, The tool will not
-    actually execute the command, it simply returns a cpHash.
+    actually execute the command, it simply returns a cpHash, it simply returns
+    a cpHash, unless rphash is also required.
+
+  * **\--rphash**=_FILE_
+
+    File path to record the hash of the response parameters. This is commonly
+    termed as rpHash.
+
+  * **-S**, **\--session**=_FILE_:
+
+    The session created using **tpm2_startauthsession**. Multiple of these can
+    be specified. For example, you can have one session for auditing and another
+    for encryption/decryption of the parameters.
 
 ## References
 

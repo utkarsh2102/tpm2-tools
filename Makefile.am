@@ -25,7 +25,7 @@ AM_LDFLAGS   := $(EXTRA_LDFLAGS) $(CODE_COVERAGE_LIBS)
 
 LDADD = \
     $(LIB_COMMON) $(TSS2_ESYS_LIBS) $(TSS2_MU_LIBS) $(CRYPTO_LIBS) $(TSS2_TCTILDR_LIBS) \
-    $(TSS2_RC_LIBS) $(TSS2_SYS_LIBS) $(UUID_LIBS)
+    $(TSS2_RC_LIBS) $(TSS2_SYS_LIBS) $(UUID_LIBS) $(EFIVAR_LIBS)
 
 AM_DISTCHECK_CONFIGURE_FLAGS = --with-bashcompdir='$$(datarootdir)/bash-completion/completions'
 
@@ -45,7 +45,7 @@ lib_libcommon_a_SOURCES = $(LIB_SRC)
 lib_libcommon_a_CFLAGS = -fPIC $(AM_CFLAGS)
 
 tools_fapi_tss2_CFLAGS = $(FAPI_CFLAGS) -DTSS2_TOOLS_MAX="$(words $(tss2_tools))"
-tools_fapi_tss2_LDFLAGS = $(TSS2_FAPI_LIBS)
+tools_fapi_tss2_LDFLAGS = $(EXTRA_LDFLAGS) $(TSS2_FAPI_LIBS)
 tools_fapi_tss2_SOURCES = \
 	tools/fapi/tss2_template.c \
 	tools/fapi/tss2_template.h \
@@ -198,7 +198,9 @@ tpm2_tools = \
     tools/tpm2_commit.c \
     tools/tpm2_ecdhkeygen.c \
     tools/tpm2_ecdhzgen.c \
-    tools/tpm2_zgen2phase.c
+    tools/tpm2_zgen2phase.c \
+    tools/tpm2_sessionconfig.c \
+    tools/tpm2_getpolicydigest.c
 
 # Create the symlinks for each tool to the tpm2 and optional tss2 bundled executables
 install-exec-hook:
@@ -310,19 +312,21 @@ test_unit_test_tpm2_eventlog_yaml_CFLAGS = $(AM_CFLAGS) $(CMOCKA_CFLAGS)
 test_unit_test_tpm2_eventlog_yaml_LDADD = $(CMOCKA_LIBS) $(LDADD)
 
 AM_TESTS_ENVIRONMENT =	\
-	TPM2_ABRMD=tpm2-abrmd; export TPM2_ABRMD; \
-	TPM2_SIM=tpm_server; export TPM2_SIM; \
-	PATH=$(abs_builddir)/tools:$(abs_builddir)/tools/misc:$(abs_top_srcdir)/test/integration:$(PATH); \
-	TPM2_TOOLS_TEST_FIXTURES=$(abs_top_srcdir)/test/integration/fixtures; \
-	SRCDIR=$(abs_srcdir); export SRCDIR; BUILDDIR=$(abs_builddir); export BUILDDIR; \
+	export TPM2_ABRMD=$(TPM2_ABRMD); \
+	export TPM2_SIM=$(TPM2_SIM); \
+	export PATH=$(abs_builddir)/tools:$(abs_builddir)/tools/misc:$(abs_top_srcdir)/test/integration:$(abs_builddir)/tools/fapi:$(PATH); \
+	export TPM2_TOOLS_TEST_FIXTURES=$(abs_top_srcdir)/test/integration/fixtures; \
+	export abs_builddir=$(abs_builddir); \
+	export abs_srcdir=$(abs_srcdir); \
+	export PYTHON=$(PYTHON); \
 	export TPM2_TOOLS_TEST_FIXTURES;
 
 if PERSISTENT
     AM_TESTS_ENVIRONMENT +=	\
-        TPM2TOOLS_TEST_PERSISTENT=true; export TPM2TOOLS_TEST_PERSISTENT;
+        TPM2TOOLS_TEST_PERSISTENT=true;
 else
     AM_TESTS_ENVIRONMENT +=	\
-        TPM2TOOLS_TEST_PERSISTENT=false; export TPM2TOOLS_TEST_PERSISTENT;
+        TPM2TOOLS_TEST_PERSISTENT=false;
 endif
 
 SH_LOG_COMPILER = dbus-run-session bash
@@ -452,6 +456,8 @@ if HAVE_MAN_PAGES
     man/man1/tpm2_ecdhkeygen.1 \
     man/man1/tpm2_ecdhzgen.1 \
     man/man1/tpm2_zgen2phase.1 \
+    man/man1/tpm2_sessionconfig.1 \
+    man/man1/tpm2_getpolicydigest.1 \
     man/man1/tpm2.1
 
 if HAVE_FAPI

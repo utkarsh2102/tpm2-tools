@@ -269,11 +269,11 @@ static bool parse_selection_data_from_file(FILE *pcr_input,
 
     if (le64toh(pcrs->count) > ARRAY_LEN(pcrs->pcr_values)) {
         LOG_ERR("Malformed PCR file, pcr count cannot be greater than %zu, got: %" PRIu64 " ",
-                ARRAY_LEN(pcrs->pcr_values), le64toh(pcrs->count));
+                ARRAY_LEN(pcrs->pcr_values), le64toh((UINT64)pcrs->count));
         return false;
     }
 
-    UINT32 j;
+    size_t j;
     for (j = 0; j < le64toh(pcrs->count); j++) {
         if (fread(&pcrs->pcr_values[j], sizeof(TPML_DIGEST), 1, pcr_input)
                 != 1) {
@@ -463,7 +463,7 @@ static tool_rc init(void) {
         if (pcr_select.count > TPM2_NUM_PCR_BANKS)
             goto err;
 
-        tpm2_eventlog_context eventlog_ctx = {};
+        tpm2_eventlog_context eventlog_ctx = { 0 };
         bool rc = eventlog_from_file(&eventlog_ctx, ctx.eventlog_path);
         if (!rc) {
             LOG_ERR("Failed to process eventlog");
