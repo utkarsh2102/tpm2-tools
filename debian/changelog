@@ -1,3 +1,11 @@
+tpm2-tools (5.1.1-0ubuntu0.18.04.1) bionic; urgency=medium
+
+  * New upstream version 5.1.1.
+  * d/p/0001_add_version_string.patch: Drop patch
+    since it is present in v5.1.1.
+
+ -- Utkarsh Gupta <utkarsh.gupta@canonical.com>  Wed, 30 Jun 2021 19:19:10 +0530
+
 tpm2-tools (5.0-2) unstable; urgency=low
 
   * Add debian/patches/0001-tpm2_import-fix-fixed-AES-key-CVE-2021-3565.patch
