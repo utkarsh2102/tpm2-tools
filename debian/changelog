@@ -1,4 +1,4 @@
-tpm2-tools (5.1.1-0ubuntu0.18.04.1) bionic; urgency=medium
+tpm2-tools (5.1.1-0ubuntu0.18.04.1~ibmcloud0.1) bionic; urgency=medium
 
   * New upstream version 5.1.1.
   * d/p/0001_add_version_string.patch: Drop patch
